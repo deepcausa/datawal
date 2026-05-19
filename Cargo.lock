@@ -240,7 +240,8 @@ dependencies = [
 [[package]]
 name = "safeatomic-rs"
 version = "0.1.0"
-source = "git+https://github.com/deepcausa/safeatomic-rs.git?tag=v0.1.0#abb6e82998179888ccb64b27c48f3342c360395d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cc90758fbc10a2ea412451d721165ede6f658dd2ec770bbe4672bf3626abbe"
 dependencies = [
  "anyhow",
 ]

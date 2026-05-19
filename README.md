@@ -3,6 +3,8 @@
 datawal is a local record store: a framed append-only `RecordLog` plus an
 optional last-write-wins `DataWal` KV projection.
 
+**MSRV:** Rust 1.75.0
+
 ## What datawal is
 
 - **`RecordLog`** — the canonical append-only list. Every write becomes a
