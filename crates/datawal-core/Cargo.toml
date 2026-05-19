@@ -1,0 +1,18 @@
+[package]
+name = "datawal-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core record store for datawal: append-only framed records (CRC32C), valid-prefix recovery, bytes-based KV projection with tombstones, manual compaction, and JSONL export. v0.1-pre."
+
+[dependencies]
+anyhow = { workspace = true }
+crc32fast = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+safeatomic-rs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

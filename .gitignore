@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# dev/ holds internal dogfood notes that reference private codebases.
+# Never published. See dev/README.md.
+/dev/
