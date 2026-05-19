@@ -23,7 +23,29 @@ fn open_new_dir_creates_first_segment() {
     let seg = dir.path().join("00000001.dwal");
     assert!(seg.exists(), "first segment should be created on open");
     let lock = dir.path().join(".lock");
-    assert!(!lock.exists(), "lock should be released after drop");
+    // The sentinel `.lock` file persists across runs; the lock is held by
+    // a file descriptor, not by the existence of the file. After drop we
+    // must be able to re-acquire.
+    assert!(lock.exists(), "sentinel lock file persists across runs");
+    let _log2 = RecordLog::open(dir.path()).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 1b. second_open_fails_while_first_open
+// ---------------------------------------------------------------------------
+#[test]
+fn second_open_fails_while_first_open() {
+    let dir = tempdir().unwrap();
+    let log1 = RecordLog::open(dir.path()).unwrap();
+    let err = RecordLog::open(dir.path()).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("already locked") || msg.contains("locked"),
+        "expected lock-conflict error, got: {msg}"
+    );
+    drop(log1);
+    // After dropping the first holder, a second open must succeed.
+    let _log2 = RecordLog::open(dir.path()).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +323,34 @@ fn unknown_record_type_errors() {
     }
     let res = RecordLog::open(dir.path());
     assert!(res.is_err(), "unknown record_type must be a hard error");
+}
+
+// ---------------------------------------------------------------------------
+// 13. append_fsync_reopen
+//
+// Append some records, fsync, drop the log, reopen, and verify that the
+// records survive. This is the durability boundary contract: append +
+// fsync = durable.
+// ---------------------------------------------------------------------------
+#[test]
+fn append_fsync_reopen() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = RecordLog::open(dir.path()).unwrap();
+        log.append(b"alpha").unwrap();
+        log.append(b"beta").unwrap();
+        log.append(b"gamma").unwrap();
+        log.fsync().unwrap();
+        // drop releases lock
+    }
+    let mut log2 = RecordLog::open(dir.path()).unwrap();
+    let records = log2.scan().unwrap();
+    let payloads: Vec<&[u8]> = records.iter().map(|r| r.payload.as_slice()).collect();
+    assert_eq!(payloads, vec![&b"alpha"[..], &b"beta"[..], &b"gamma"[..]]);
+    let report = log2.recovery_report().unwrap();
+    assert_eq!(report.records_replayed, 3);
+    assert_eq!(report.tail_truncated, 0);
+    assert_eq!(report.tail_bytes_discarded, 0);
 }
 
 // Helper: confirm File::open works (used to silence lint).

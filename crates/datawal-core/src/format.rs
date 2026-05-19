@@ -22,11 +22,9 @@
 //! Notes:
 //! - CRC covers the 24-byte header AND key AND payload (everything before the
 //!   CRC itself).
-//! - `crc32fast` exposes IEEE/Castagnoli; v0.1-pre uses **`crc32fast::Hasher`**
-//!   which is the standard CRC32 (IEEE/zlib polynomial). The on-disk field is
-//!   named `crc32c` for forward compatibility but is computed by `crc32fast`
-//!   for now. This is documented as a known v0.1-pre quirk; switching to true
-//!   CRC32C is a follow-up that requires a wire version bump.
+//! - CRC algorithm is **CRC32C** (Castagnoli, polynomial 0x1EDC6F41), computed
+//!   with the [`crc32c`] crate. There is a known-vector test in this module
+//!   (see `crc32c_known_vector`) pinning the algorithm.
 //! - All multi-byte integers are little-endian.
 
 use std::io::Write;
@@ -127,10 +125,8 @@ pub fn encode_record(
     buf.write_all(key)?;
     buf.write_all(payload)?;
 
-    // CRC over everything we just wrote.
-    let mut h = crc32fast::Hasher::new();
-    h.update(&buf);
-    let crc = h.finalize();
+    // CRC32C (Castagnoli) over everything we just wrote.
+    let crc = crc32c::crc32c(&buf);
     buf.write_all(&crc.to_le_bytes())?;
 
     debug_assert_eq!(buf.len(), total);
@@ -297,9 +293,7 @@ pub fn decode_next(buf: &[u8], offset: u64) -> std::result::Result<DecodeOutcome
         buf[crc_start + 3],
     ]);
 
-    let mut h = crc32fast::Hasher::new();
-    h.update(&buf[off..crc_start]);
-    let crc_actual = h.finalize();
+    let crc_actual = crc32c::crc32c(&buf[off..crc_start]);
     if crc_actual != crc_expected {
         return Ok(DecodeOutcome::CrcMismatch {
             bytes_consumed: total as u32,
@@ -318,6 +312,22 @@ pub fn decode_next(buf: &[u8], offset: u64) -> std::result::Result<DecodeOutcome
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin the CRC algorithm to CRC32C (Castagnoli, polynomial 0x1EDC6F41).
+    ///
+    /// These vectors come from the iSCSI / RFC 3720 reference set. If a
+    /// future refactor accidentally switches to CRC32 IEEE (zlib polynomial
+    /// 0xEDB88320), this test will fail loudly.
+    #[test]
+    fn crc32c_known_vector() {
+        assert_eq!(crc32c::crc32c(b""), 0x0000_0000);
+        assert_eq!(crc32c::crc32c(b"123456789"), 0xE306_9283);
+        // A 32-byte all-zeros buffer is another commonly cited CRC32C vector.
+        assert_eq!(crc32c::crc32c(&[0u8; 32]), 0x8A91_36AA);
+        // Sanity: CRC32 IEEE of "123456789" is 0xCBF43926. This must NOT match,
+        // otherwise we have silently regressed to IEEE.
+        assert_ne!(crc32c::crc32c(b"123456789"), 0xCBF4_3926);
+    }
 
     #[test]
     fn roundtrip_raw_empty_key() {

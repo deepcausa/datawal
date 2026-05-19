@@ -50,24 +50,58 @@ A log of choices, not yet a design document. Each entry has a status:
 - Rationale: lock the API names early; defer protocol decisions until
   the format is understood. v0.1-pre (TD-012) implements them for real.
 
-## TD-006 — Length-prefixed framing with CRC, but CRC32 IEEE in v0.1-pre
-- **Status:** accepted (v0.1-pre); CRC implementation revisable via wire-version bump
-- Layout (28 bytes header + body + 4-byte CRC), see `docs/canon.md` §5.
-- v0.1-pre uses `crc32fast` (CRC-32 IEEE / Ethernet), not Castagnoli. The
-  on-disk field is named `crc32c` so the implementation can swap to a
-  real CRC-32C with a `WIRE_VERSION` bump from `1` to `2` without
-  renaming the format.
-- Alternatives reconsidered: CRC-32C (better polynomial; deferred to v0.2
-  to keep the v0.1-pre dependency set tiny), xxhash64 (8 bytes, no
-  widespread HW accel), blake3 (overkill for frame integrity).
+## TD-006 — Length-prefixed framing with CRC-32C
+- **Status:** accepted
+- Layout (28-byte header + body + 4-byte CRC), see `docs/canon.md` §5.
+- CRC is CRC-32C (Castagnoli), polynomial `0x1EDC6F41`, via the `crc32c`
+  crate. Pinned by a known-vector test in `format.rs` against RFC 3720
+  reference values, including a sentinel `assert_ne!` against the
+  CRC-32 IEEE result for `"123456789"` to detect any silent regression.
+- Earlier history: v0.1-pre originally shipped with `crc32fast` (CRC-32
+  IEEE / Ethernet) under the name `crc32c`, as a deliberate misnomer to
+  defer the dependency choice. That drift was corrected before any
+  external consumer existed, so the on-disk format never had to bump
+  `WIRE_VERSION` from `1`.
+- Alternatives reconsidered: xxhash64 (8 bytes; no widespread HW accel
+  on the relevant platforms), blake3 (overkill for frame integrity).
 
-## TD-007 — Single-writer advisory lock (v0.1-pre: best-effort lockfile)
-- **Status:** accepted (v0.1-pre); upgrade to OS advisory lock tracked
-- `RecordLog::open` creates `{dir}/.lock` with `OpenOptions::create_new`
-  in v0.1-pre. A crashed writer leaves a stale lock that must be removed
-  by hand. This is documented in `docs/canon.md` §9.
-- Upgrade path: `fs2`/`fd-lock` for real OS-level advisory locks, to
-  land in v0.2.
+## TD-007 — Single-writer advisory lock via `fs2`
+- **Status:** accepted
+- `RecordLog::open` acquires an exclusive OS-level advisory lock on
+  `{dir}/.lock` using `fs2::FileExt::try_lock_exclusive` (POSIX
+  `flock(2)` on Unix, `LockFileEx` on Windows). The lock is held by
+  the file descriptor stored inside the `RecordLog`; `Drop` and process
+  exit release it. The sentinel `.lock` file persists between runs and
+  is **not** the lock — only the kernel-held flock is.
+- Acquisition is non-blocking: `try_lock_exclusive` fails fast if another
+  holder is alive. A stale `.lock` file from a previous crashed process
+  is not a problem; the kernel releases the flock automatically when
+  the holding process exits.
+- This is *advisory*: only cooperating callers that all go through
+  `RecordLog::open` are protected. Mandatory locking and multi-writer
+  semantics remain out of scope.
+- Tests: `acquire_then_release_allows_reacquire`,
+  `second_acquire_fails_while_first_held`, `drop_releases_lock`,
+  `stale_lock_file_is_not_a_problem` in `src/lock.rs`; plus
+  `second_open_fails_while_first_open` and the reopen flow in
+  `tests/record_log.rs`.
+
+## TD-007a — Durability boundary
+- **Status:** accepted
+- `RecordLog::append` / `append_record` write a framed, CRC-protected
+  record via `write_all` to the active segment's underlying file. The
+  record is *recoverable* immediately (a subsequent `scan()` will
+  return it modulo OS buffering), but is **not durable** across a host
+  crash or power loss until `RecordLog::fsync` returns successfully.
+- `RecordLog::fsync` calls `File::sync_all` on the active segment and
+  `safeatomic_rs::fsync_dir` on the containing directory, so segment
+  creations / rotations are also durable.
+- v0.1-pre does not offer fdatasync, group commit, configurable fsync
+  policy, or per-batch atomic commit. Callers that need per-record
+  durability must pair every `append` with an `fsync`.
+- Tests: `append_fsync_reopen` in `tests/record_log.rs`; documented
+  contract on `append`, `append_record` and `fsync` doc comments and
+  in `docs/canon.md` §9a.
 
 ## TD-008 — No CAS in v0.1
 - **Status:** accepted

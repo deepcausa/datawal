@@ -4,12 +4,17 @@
 //! on-disk segment naming convention.
 //!
 //! v0.1-pre semantics:
-//! - Single writer. Cooperative `.lock` file via [`crate::lock`]. No
-//!   multi-process safety.
+//! - Single writer per directory, enforced by an OS-level advisory lock
+//!   on `.lock` (see [`crate::lock`]).
 //! - One active segment file at a time. `rotate()` closes the current one
 //!   and opens the next id.
-//! - `append` writes the framed record to the active segment's underlying
-//!   file. No per-record fsync. Call `fsync()` explicitly to commit.
+//! - **Durability boundary.** `append` / `append_record` write a framed,
+//!   CRC-protected record to the active segment's file. The record is
+//!   immediately *recoverable* (a subsequent `scan()` will return it) but
+//!   is **not yet durable** across a host crash or power loss. Durability
+//!   is established by a successful call to `fsync()`, which `sync_all`s
+//!   the active segment file and fsyncs the containing directory. This
+//!   crate never silently fsyncs on every append.
 //! - `scan` reads every segment in order and returns every CRC-valid record.
 //!   Tail truncation on the **last** segment is treated as recoverable; any
 //!   structural error (bad magic, unknown version/type, oversize) and any
@@ -99,12 +104,17 @@ impl RecordLog {
     ///
     /// Steps:
     /// 1. `mkdir -p dir`.
-    /// 2. Acquire the cooperative `.lock` file.
+    /// 2. Acquire an exclusive OS-level advisory lock on `<dir>/.lock`
+    ///    (held by a file descriptor; released automatically when this
+    ///    `RecordLog` is dropped or when the holding process exits).
     /// 3. Discover segments; if none, create segment id 1.
     /// 4. Pick the highest id as the active segment.
     /// 5. Scan all segments to discover `next_txid` and store the recovery
     ///    report.
     /// 6. Open the active segment for append.
+    ///
+    /// Fails fast if another `RecordLog` is already open on the same
+    /// directory (the kernel-level lock acquisition does not block).
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("datawal: create_dir_all {}", dir.display()))?;
@@ -182,6 +192,20 @@ impl RecordLog {
     }
 
     /// Append an opaque payload as a `Raw` record.
+    ///
+    /// **Durability boundary.** This call writes a framed, CRC-protected
+    /// record to the active segment's file via `write_all`. It does **not**
+    /// fsync the file or the directory. The record is *recoverable* (a
+    /// subsequent `scan()` will return it) as long as the OS does not lose
+    /// the buffered write, but it is **not yet durable** across a power
+    /// failure or hard crash of the host until `fsync()` returns
+    /// successfully.
+    ///
+    /// Pattern for "this must survive a crash":
+    /// ```ignore
+    /// log.append(payload)?;
+    /// log.fsync()?;
+    /// ```
     pub fn append(&mut self, payload: &[u8]) -> Result<RecordRef> {
         self.append_record(RecordType::Raw, b"", payload)
     }
@@ -190,6 +214,10 @@ impl RecordLog {
     ///
     /// Used by [`crate::DataWal`] for `Put` / `Delete`. Length limits are
     /// validated by the encoder before allocation.
+    ///
+    /// Same durability semantics as [`RecordLog::append`]: framed and
+    /// recoverable on return, but only durable after a successful
+    /// [`RecordLog::fsync`].
     pub fn append_record(
         &mut self,
         record_type: RecordType,
@@ -235,6 +263,21 @@ impl RecordLog {
     }
 
     /// Force durability of all records appended so far.
+    ///
+    /// On successful return, every record passed to `append` /
+    /// `append_record` since this `RecordLog` was opened (or since the last
+    /// `fsync` returned) is durable: it will survive a process crash,
+    /// kernel panic or power loss on the underlying disk, modulo the
+    /// usual filesystem caveats (working `fsync` syscall, no lying disk
+    /// cache).
+    ///
+    /// Internally this calls `File::sync_all` on the active segment **and**
+    /// `fsync` on the containing directory, so that segment creations and
+    /// rotations are also durable.
+    ///
+    /// `fsync` may be called as often as desired; on a log with no new
+    /// appends since the last fsync it is effectively a no-op at the
+    /// kernel level, but it is always safe.
     pub fn fsync(&mut self) -> Result<()> {
         self.active_file.sync_all().with_context(|| {
             format!(
@@ -287,7 +330,9 @@ impl RecordLog {
 
     /// Close the log, releasing the directory lock.
     pub fn close(self) -> Result<()> {
-        // Dropping `self` runs `DirLock::drop` which removes `.lock`.
+        // Dropping `self` runs `DirLock::drop`, which closes the lock file
+        // descriptor and releases the kernel-level flock. The sentinel
+        // `.lock` file itself remains on disk; it is not the lock.
         Ok(())
     }
 }

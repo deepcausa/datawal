@@ -41,12 +41,12 @@ Binding decisions. These hold until explicitly retracted in this file.
    ```
    Total bytes on disk: `28 + key_len + payload_len`.
 
-6. **CRC implementation in v0.1-pre is CRC-32 IEEE, not Castagnoli.**
-   `crc32fast` (Ethernet polynomial) is used because adding a CRC32C
-   dependency was rejected for v0.1-pre. The on-disk field is named
-   `crc32c` so a future wire-version bump can swap the implementation
-   without renaming the format. Any switch to Castagnoli requires a
-   bump of `WIRE_VERSION` from `1` to `2`.
+6. **CRC is CRC-32C (Castagnoli).**
+   Polynomial `0x1EDC6F41`, computed over `header_without_crc || key ||
+   payload` via the `crc32c` crate. Pinned by a known-vector test in
+   `format.rs` against the RFC 3720 reference values, so a silent
+   regression to CRC-32 IEEE (or any other polynomial) fails the suite.
+   The wire field name `crc32c` matches the algorithm.
 
 7. **No compression in v0.1.**
    Records are stored raw. `zstd` is planned as an opt-in cargo feature
@@ -65,12 +65,28 @@ Binding decisions. These hold until explicitly retracted in this file.
 
 ## Concurrency
 
-9. **Single writer per directory.**
-   `RecordLog::open` creates `{dir}/.lock` via `OpenOptions::create_new`
-   in v0.1-pre. This is best-effort: a crashed writer leaves a stale
-   lock that must be removed manually. A real OS-level advisory lock
-   (`fs2`/`fd-lock`) is on the v0.2 list. Concurrent readers are not
-   guaranteed to see a consistent view in v0.1-pre.
+9. **Single writer per directory, OS-level advisory lock.**
+   `RecordLog::open` acquires an exclusive advisory lock on `{dir}/.lock`
+   via `fs2::FileExt::try_lock_exclusive` (POSIX `flock(2)` on Unix,
+   `LockFileEx` on Windows). The lock is held by the file descriptor
+   stored inside the `RecordLog`, not by the existence of the file.
+   Drop / process exit releases the lock automatically; the sentinel
+   `.lock` file is allowed to persist between runs. Acquisition is
+   non-blocking: a second `open` on the same directory fails fast while
+   the first holder is alive. This is *advisory*: cooperating callers
+   must all go through `RecordLog::open` for the guarantee to hold.
+   Concurrent readers are not guaranteed to see a consistent view in
+   v0.1-pre.
+
+9a. **Durability boundary.**
+    `RecordLog::append` / `append_record` write a framed, CRC-protected
+    record to the active segment file. The record is *recoverable*
+    immediately (a subsequent `scan()` returns it), but it is **not
+    durable** across a host crash or power loss until `RecordLog::fsync`
+    returns successfully. `fsync` `sync_all`s the active segment file
+    **and** fsyncs the containing directory. datawal never silently
+    fsyncs on every append. Callers requiring per-record durability must
+    pair every `append` with an `fsync`.
 
 10. **No network, no RPC.**
     datawal is a library, not a service.
