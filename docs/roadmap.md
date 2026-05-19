@@ -7,6 +7,10 @@ versions.
 It is the binding scope statement for the current cut. Anything not
 listed under "Inside v0.1.0-alpha" should be assumed **not implemented**.
 
+**v0.1.0-alpha: shipped locally, tagged (`git tag v0.1.0-alpha`), no remote
+push, not published to crates.io.** The core protocol is frozen. See the
+"Protocol freeze" note after the one-line cut below.
+
 The goal of v0.1.0-alpha is to be small, correct, recoverable, and
 useful for plain append-only logs and tiny local key/value state. It is
 *not* a replacement for a real database, a real WAL system, or a real
@@ -343,6 +347,73 @@ manifest, query, in-place compact.
 
 ---
 
+## Protocol freeze
+
+**Do not edit `format.rs` or `record_log.rs` without expecting corpus,
+TLA+ model, and wire-format consequences.**
+
+Specifically:
+
+- Any change to the byte layout requires regenerating `tests/corpus/` and
+  bumping `WIRE_VERSION`.
+- Any change to recovery semantics requires updating `formal/RecordLog.tla`
+  and re-running TLC.
+- Any change to keydir semantics requires updating `formal/KeydirProjection.tla`.
+- Any change to compaction requires updating `formal/Compaction.tla`.
+
+The v0.1.0-alpha format is intentionally frozen. Later versions that must
+change the wire format will bump `WIRE_VERSION` and document the migration
+path.
+
+---
+
+## Next tracks
+
+Two independent directions are possible after v0.1.0-alpha. Neither is
+started. A decision is pending.
+
+### Track A — Rust production track
+
+Hardening the Rust library for real workloads and publication:
+
+- Benchmarks: append latency, throughput, recovery time, `compact_to` time.
+- CI matrix: Linux / macOS / Windows × stable / MSRV.
+- Fuzzing: `cargo-fuzz` on the record decoder, header parser, corpus
+  mutation.
+- Soak test: 24h append/rotate/fsync/reopen cycle.
+- Crash injection: kill during `append`, `rotate`, `compact_to`.
+- `fdatasync` / `fsync_policy` if a real workload demands it.
+- Streaming `scan` that does not allocate the full record list.
+- Keydir by offset (not by full value) to reduce memory pressure.
+- In-place `compact()` — only when it can be made obviously safe.
+- Reader API (cursor / snapshot), then `ReadWhileWrite` TLA+ model.
+- `cargo publish` to crates.io.
+
+### Track B — Python visibility track
+
+Wrapping the Rust core for Python consumption:
+
+- PyO3 bindings for `RecordLog` and `DataWal`.
+- `maturin` build and wheel publication.
+- Minimal Python API exposing `RecordLog.append / scan / fsync` and
+  `DataWal.put / get / delete`.
+- Python examples.
+- `pytest` tests.
+- Docs for Python users.
+- No CAS in this track.
+
+### Decision pending
+
+```text
+Decision pending: Track A (Rust production) or Track B (Python visibility) first.
+```
+
+The two tracks are independent. Track B can start without Track A being
+complete. Track A does not require Python. The order depends on where the
+first real consumer is.
+
+---
+
 ## Acceptance criteria (must keep working)
 
 These snippets must keep passing on `cargo test --workspace`.
@@ -382,14 +453,17 @@ If either of those breaks, v0.1.0-alpha is regressed.
 
 ## What v0.2 is *likely* to add
 
-Not a commitment. The most plausible next steps:
+Not a commitment. Depends on which track (A or B) is chosen first and
+what real workloads reveal. Plausible items:
 
-- A `JsonCodec<T>` helper crate built on top of the bytes core.
-- PyO3 bindings for `RecordLog` and `DataWal`.
-- A real `compact()` in place (only if it can be made obviously safe).
-- A `ReadWhileWrite` TLA+ model alongside a real reader API.
+- A `JsonCodec<T>` helper crate on top of the bytes core.
+- PyO3 bindings (Track B).
+- A real `compact()` in place — only if it can be made obviously safe.
+- A `ReadWhileWrite` TLA+ model alongside a real reader API (Track A).
 - Optional `zstd` per-record compression (uses one bit in `flags`).
 - Group commit / `fsync_policy` if a real workload demands it.
 
 CAS, server, multi-writer, transactions, query — those stay out of the
-near-term roadmap.
+near-term roadmap. CAS/blob is a separate crate concern (`datablob-rs`),
+not a `datawal-core` feature. Chunking (FastCDC) is above the CAS layer
+and is not part of `datawal-core` either.
