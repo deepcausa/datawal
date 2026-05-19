@@ -248,7 +248,7 @@ pub fn decode_next(buf: &[u8], offset: u64) -> std::result::Result<DecodeOutcome
     // Record type.
     let rt_byte = header[6];
     let record_type = match rt_byte {
-        0 | 1 | 2 => rt_byte,
+        0..=2 => rt_byte,
         other => return Err(DecodeError::UnknownRecordType { found: other }),
     };
 

@@ -1,0 +1,192 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # Pin TLA+ tools to a known release. Bump deliberately when needed.
+  TLA_TOOLS_URL: "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar"
+
+jobs:
+  rust:
+    name: rust (fmt + check + clippy + test + doc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --all-targets
+
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  formal:
+    name: formal (TLC on RecordLog / KeydirProjection / Compaction)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache tla2tools.jar
+        id: cache-tla
+        uses: actions/cache@v4
+        with:
+          path: tla2tools.jar
+          key: tla-tools-v1.8.0
+
+      - name: Download tla2tools.jar
+        if: steps.cache-tla.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL "${TLA_TOOLS_URL}" -o tla2tools.jar
+          ls -la tla2tools.jar
+          # Best-effort sanity check that we got a real jar.
+          file tla2tools.jar | tee /dev/stderr | grep -qi "Zip archive\|Java archive"
+
+      - name: TLC RecordLog
+        run: |
+          set -euo pipefail
+          cd formal
+          java -XX:+UseParallelGC -cp "$GITHUB_WORKSPACE/tla2tools.jar" tlc2.TLC \
+            -workers 2 -config RecordLog.cfg RecordLog.tla | tee /tmp/RecordLog.log
+          grep -q "Model checking completed. No error has been found." /tmp/RecordLog.log
+
+      - name: TLC KeydirProjection
+        run: |
+          set -euo pipefail
+          cd formal
+          java -XX:+UseParallelGC -cp "$GITHUB_WORKSPACE/tla2tools.jar" tlc2.TLC \
+            -workers 2 -config KeydirProjection.cfg KeydirProjection.tla | tee /tmp/KeydirProjection.log
+          grep -q "Model checking completed. No error has been found." /tmp/KeydirProjection.log
+
+      - name: TLC Compaction
+        run: |
+          set -euo pipefail
+          cd formal
+          java -XX:+UseParallelGC -cp "$GITHUB_WORKSPACE/tla2tools.jar" tlc2.TLC \
+            -workers 2 -config Compaction.cfg Compaction.tla | tee /tmp/Compaction.log
+          grep -q "Model checking completed. No error has been found." /tmp/Compaction.log
+
+      - name: Upload TLC logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-logs
+          path: |
+            /tmp/RecordLog.log
+            /tmp/KeydirProjection.log
+            /tmp/Compaction.log
+          if-no-files-found: ignore
+
+  corpus:
+    name: corpus (no wire-format drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Regenerate corpus into tempdir
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/corpus-check
+          mkdir -p /tmp/corpus-check
+          cargo run -p datawal-core --example gen_corpus -- /tmp/corpus-check
+
+      - name: Compare against in-tree corpus via sha256
+        run: |
+          set -euo pipefail
+          ref=crates/datawal-core/tests/corpus
+          gen=/tmp/corpus-check
+
+          # Build sorted sha256 listings of all *.dwal files (relative paths).
+          # README.md and other non-fixture files in ref/ are excluded.
+          (
+            cd "$ref"
+            find . -type f -name '*.dwal' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > /tmp/ref.sha256
+
+          (
+            cd "$gen"
+            find . -type f -name '*.dwal' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > /tmp/gen.sha256
+
+          echo "--- reference (in-tree) ---"
+          cat /tmp/ref.sha256
+          echo "--- generated (this run) ---"
+          cat /tmp/gen.sha256
+
+          if ! diff -u /tmp/ref.sha256 /tmp/gen.sha256; then
+            echo
+            echo "ERROR: wire-format corpus drifted."
+            echo "If this drift is intentional, run:"
+            echo "  cargo run -p datawal-core --example gen_corpus"
+            echo "and commit the updated fixtures under crates/datawal-core/tests/corpus/."
+            exit 1
+          fi
+          echo "Corpus matches in-tree fixtures."
+
+      - name: Upload generated corpus on drift
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-generated
+          path: /tmp/corpus-check
+          if-no-files-found: ignore

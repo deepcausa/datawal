@@ -185,10 +185,7 @@ impl RecordLog {
 
     /// Last recovery report computed by `open()` or `scan()`.
     pub fn recovery_report(&self) -> Result<RecoveryReport> {
-        Ok(self
-            .last_report
-            .clone()
-            .unwrap_or_else(RecoveryReport::default))
+        Ok(self.last_report.clone().unwrap_or_default())
     }
 
     /// Append an opaque payload as a `Raw` record.

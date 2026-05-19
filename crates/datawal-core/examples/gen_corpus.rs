@@ -5,23 +5,51 @@
 //!
 //! ```text
 //! cargo run -p datawal-core --example gen_corpus
+//! cargo run -p datawal-core --example gen_corpus -- /tmp/corpus-check
 //! ```
+//!
+//! Without arguments, fixtures are written to the in-tree corpus location.
+//! With a single positional argument, fixtures are written there instead
+//! (used by CI to compare against the in-tree corpus and detect wire-format
+//! drift).
 //!
 //! This is **not** run as part of `cargo test`. It writes binary fixtures
 //! that are then committed to the repository and consumed by
 //! `tests/corpus_fixtures.rs`. Re-run only when the wire format changes
 //! intentionally; otherwise the corpus is meant to stay frozen.
 
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datawal_core::{DataWal, RecordLog};
 
-fn corpus_root() -> PathBuf {
+fn corpus_root_default() -> PathBuf {
     // examples/ lives next to Cargo.toml of datawal-core.
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     crate_dir.join("tests").join("corpus")
+}
+
+fn resolve_root() -> Result<PathBuf> {
+    let mut args = env::args().skip(1);
+    match args.next() {
+        Some(arg) => {
+            if args.next().is_some() {
+                anyhow::bail!("gen_corpus accepts at most one positional argument (output dir)");
+            }
+            // Resolve relative paths against CWD, so the path is unambiguous
+            // even when downstream code uses with_file_name on root entries.
+            let p = PathBuf::from(arg);
+            let abs = if p.is_absolute() {
+                p
+            } else {
+                env::current_dir()?.join(p)
+            };
+            Ok(abs)
+        }
+        None => Ok(corpus_root_default()),
+    }
 }
 
 fn reset_dir(p: &Path) -> Result<()> {
@@ -33,7 +61,7 @@ fn reset_dir(p: &Path) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let root = corpus_root();
+    let root = resolve_root()?;
     fs::create_dir_all(&root)?;
     eprintln!("corpus root: {}", root.display());
 
@@ -155,8 +183,13 @@ fn gen_delete_tombstone(dir: &Path) -> Result<()> {
 
 fn gen_compact_to_output(dir: &Path) -> Result<()> {
     // We need a source log first; produce one, compact_to a sibling dir,
-    // and ship the compacted dir.
-    let source = dir.with_file_name("compact_to_source");
+    // and ship the compacted dir. Make the sibling location robust even
+    // when `dir` is at the filesystem root (e.g. when the caller passes
+    // an arbitrary tempdir path).
+    let source = match dir.parent() {
+        Some(parent) => parent.join("compact_to_source"),
+        None => PathBuf::from("compact_to_source"),
+    };
     reset_dir(&source)?;
     if dir.exists() {
         fs::remove_dir_all(dir)?;
