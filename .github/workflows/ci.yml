@@ -45,18 +45,21 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.toolchain }}-
 
       - name: cargo fmt --check
+        if: matrix.toolchain == 'stable'
         run: cargo fmt --all -- --check
 
       - name: cargo check
         run: cargo check --workspace --all-targets
 
       - name: cargo clippy
+        if: matrix.toolchain == 'stable'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
         run: cargo test --workspace --all-targets
 
       - name: cargo doc
+        if: matrix.toolchain == 'stable'
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
