@@ -131,7 +131,7 @@ fn crc_mismatch_in_payload_returns_error_or_report() {
     let mut f = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&seg)
+        .open(seg.as_path())
         .unwrap();
     let payload_byte_offset = r2.offset + HEADER_LEN as u64;
     f.seek(SeekFrom::Start(payload_byte_offset)).unwrap();
@@ -264,7 +264,7 @@ fn unknown_magic_errors() {
     }
     let seg = dir.path().join("00000001.dwal");
     {
-        let mut f = OpenOptions::new().write(true).open(&seg).unwrap();
+        let mut f = OpenOptions::new().write(true).open(seg.as_path()).unwrap();
         f.seek(SeekFrom::Start(0)).unwrap();
         f.write_all(b"XXXX").unwrap();
         drop(f);
@@ -290,7 +290,7 @@ fn unknown_version_errors() {
     let seg = dir.path().join("00000001.dwal");
     {
         // version is at offset 4 (right after MAGIC), 2 bytes LE.
-        let mut f = OpenOptions::new().write(true).open(&seg).unwrap();
+        let mut f = OpenOptions::new().write(true).open(seg.as_path()).unwrap();
         f.seek(SeekFrom::Start(4)).unwrap();
         f.write_all(&[0xFF, 0xFF]).unwrap();
         drop(f);
@@ -316,7 +316,7 @@ fn unknown_record_type_errors() {
     let seg = dir.path().join("00000001.dwal");
     {
         // record_type is at offset 6 (after MAGIC+version), 1 byte.
-        let mut f = OpenOptions::new().write(true).open(&seg).unwrap();
+        let mut f = OpenOptions::new().write(true).open(seg.as_path()).unwrap();
         f.seek(SeekFrom::Start(6)).unwrap();
         f.write_all(&[0xEE]).unwrap();
         drop(f);

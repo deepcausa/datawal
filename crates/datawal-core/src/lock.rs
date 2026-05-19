@@ -153,7 +153,7 @@ mod tests {
         // holds the kernel lock. We must still be able to acquire.
         let td = TempDir::new().unwrap();
         let path = td.path().join(LOCK_FILENAME);
-        std::fs::write(&path, b"12345\n").unwrap();
+        std::fs::write(path, b"12345\n").unwrap();
         let _l = DirLock::acquire(td.path()).unwrap();
     }
 }
