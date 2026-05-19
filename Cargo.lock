@@ -240,6 +240,7 @@ dependencies = [
 [[package]]
 name = "safeatomic-rs"
 version = "0.1.0"
+source = "git+https://github.com/deepcausa/safeatomic-rs.git?tag=v0.1.0#abb6e82998179888ccb64b27c48f3342c360395d"
 dependencies = [
  "anyhow",
 ]

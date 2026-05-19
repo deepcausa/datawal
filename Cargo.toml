@@ -8,7 +8,8 @@ members = [
 version = "0.1.0-alpha"
 edition = "2021"
 license = "Apache-2.0"
-repository = ""
+repository = "https://github.com/deepcausa/datawal"
+homepage = "https://github.com/deepcausa/datawal"
 rust-version = "1.75"
 
 [workspace.dependencies]
@@ -18,5 +19,11 @@ fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-safeatomic-rs = { path = "../safeatomic-rs" }
+safeatomic-rs = { git = "https://github.com/deepcausa/safeatomic-rs.git", tag = "v0.1.0" }
 tempfile = "3"
+
+# safeatomic-rs is pinned to its published git tag so CI clones of this
+# repository build standalone. For local development against an unpublished
+# checkout of safeatomic-rs, apply a `[patch."https://github.com/deepcausa/safeatomic-rs.git"]`
+# entry in a private (uncommitted) overlay manifest, or temporarily edit this
+# file. Do not commit such overrides.

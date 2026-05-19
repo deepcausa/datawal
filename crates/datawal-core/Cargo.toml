@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Core record store for datawal: append-only framed records (CRC32C), valid-prefix recovery, bytes-based KV projection with tombstones, manual compaction, and JSONL export. v0.1-pre."
 
 [dependencies]

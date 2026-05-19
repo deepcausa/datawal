@@ -46,7 +46,8 @@ optional last-write-wins `DataWal` KV projection.
 
 ## Current status
 
-**`v0.1.0-alpha` is functional but not production-ready.**
+**datawal is currently `v0.1.0-alpha`: functional and model-checked at
+the protocol level, but not production-ready.**
 
 It is tagged locally (`git tag v0.1.0-alpha`), has no remote push, and has not
 been published to crates.io. It is shelf-ready: correct enough to be shelved and
@@ -200,6 +201,19 @@ cargo run -p datawal-core --example gen_corpus
 ```
 
 See `crates/datawal-core/tests/corpus/README.md`.
+
+## Related projects
+
+- [`safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs) — Rust
+  filesystem primitives used by datawal for atomic writes and directory
+  fsyncs.
+- [`safeatomic`](https://github.com/deepcausa/safeatomic) — Python package
+  for whole-file persistence with explicit guarantees and runtime
+  diagnostics.
+
+`safeatomic` is for replacing whole files safely.
+`datawal` is for appending recoverable records and deriving local state
+from them.
 
 ## See also
 
