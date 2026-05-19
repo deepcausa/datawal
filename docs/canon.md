@@ -6,8 +6,9 @@ Binding decisions. These hold until explicitly retracted in this file.
 
 1. **RecordLog is the canonical append-only list.**
    All persisted state of a datawal directory is reconstructible from its
-   segment files plus the MANIFEST. The MANIFEST is a hint; segments are the
-   source of truth.
+   segment files. There is no MANIFEST in v0.1.0-alpha; the directory
+   listing of `*.dwal` files is the source of truth. A future explicit
+   manifest, if added, would be a hint and would not replace this rule.
 
 2. **DataWal is a projection.**
    The KV view is a *deterministic* fold over the RecordLog with
@@ -49,10 +50,10 @@ Binding decisions. These hold until explicitly retracted in this file.
    The wire field name `crc32c` matches the algorithm.
 
 7. **No compression in v0.1.**
-   Records are stored raw. `zstd` is planned as an opt-in cargo feature
-   (`zstd = ["dep:zstd"]`) for v0.2+. Compression, when added, applies
-   per-record and is signaled in a per-record header bit (currently
-   reserved in `flags`, which must be zero in v0.1-pre).
+    Records are stored raw. `zstd` is planned as an opt-in cargo feature
+    (`zstd = ["dep:zstd"]`) for v0.2+. Compression, when added, applies
+    per-record and is signaled in a per-record header bit (currently
+    reserved in `flags`, which must be zero in v0.1.0-alpha).
 
 8. **Recovery = longest valid prefix.**
    On `open`, segments are scanned in ascending id order. The active
@@ -75,8 +76,8 @@ Binding decisions. These hold until explicitly retracted in this file.
    non-blocking: a second `open` on the same directory fails fast while
    the first holder is alive. This is *advisory*: cooperating callers
    must all go through `RecordLog::open` for the guarantee to hold.
-   Concurrent readers are not guaranteed to see a consistent view in
-   v0.1-pre.
+    Concurrent readers are not guaranteed to see a consistent view in
+    v0.1.0-alpha.
 
 9a. **Durability boundary.**
     `RecordLog::append` / `append_record` write a framed, CRC-protected
@@ -114,8 +115,8 @@ Binding decisions. These hold until explicitly retracted in this file.
 
 14. **No piloting in upstream consumers yet.**
     Migrating any upstream call site onto datawal is *planned*, not
-    started. Pilots land only after `RecordLog` works. `v0.1-pre` clears
-    that gate.
+    started. Pilots land only after `RecordLog` works. `v0.1.0-alpha`
+    clears that gate but no pilot is in flight in this repository.
 
 ## Dependencies
 
@@ -138,7 +139,7 @@ Binding decisions. These hold until explicitly retracted in this file.
     `open` by replaying all records in physical order. `delete` writes
     a tombstone record with an empty payload. `compact_to(out_dir)`
     writes one `Put` per live key into a fresh log and is the only
-    supported compaction in v0.1-pre. In-place `compact()` is not
+    supported compaction in v0.1.0-alpha. In-place `compact()` is not
     implemented because it cannot be made safe without further work.
 
 17. **`export_jsonl` is base64.**

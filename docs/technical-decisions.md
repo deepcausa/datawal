@@ -139,27 +139,74 @@ A log of choices, not yet a design document. Each entry has a status:
   not a framed log: record framing, CRC, segmentation, and recovery remain
   datawal's responsibility.
 
-## TD-012 — `datawal-core` v0.1-pre implements the protocol
+## TD-012 — `datawal-core` v0.1.0-alpha implements the protocol
 - **Status:** accepted
-- Modules added: `format` (wire format, encode/decode, CRC, limits),
-  `segment` (segment naming and listing), `lock` (best-effort `.lock`),
-  `record_log` (RecordLog), `datawal` (DataWal KV).
-- Dependencies added: `crc32fast`, `serde`, `serde_json`, `base64`,
-  `safeatomic-rs` (path), and `tempfile` (dev only).
-- `RecordLog` is `&mut self` for writes and rescans on `scan()`; payloads
-  are returned in full as `Vec<u8>` (no zero-copy in v0.1-pre).
+- Modules: `format` (wire format, encode/decode, CRC, limits),
+  `segment` (segment naming and listing), `lock` (fs2 fd-based advisory
+  lock), `record_log` (RecordLog), `datawal` (DataWal KV).
+- Dependencies (runtime): `anyhow`, `crc32c`, `fs2`, `serde`,
+  `serde_json`, `base64`, `safeatomic-rs` (path). Dev: `tempfile`.
+- `RecordLog` is `&mut self` for writes and rescans on `scan()`;
+  payloads are returned in full as `Vec<u8>` (no zero-copy in
+  v0.1.0-alpha).
 - `DataWal` keydir is `HashMap<Vec<u8>, Vec<u8>>` — full values are kept
-  in memory. This is acceptable for the v0.1-pre target workloads
+  in memory. This is acceptable for the v0.1.0-alpha target workloads
   (append-only JSONL-shaped audit/checkpoint logs) but is the obvious
   thing to optimise next.
 - `compact_to(out_dir)` is the only supported compaction. In-place
   `compact()` is deliberately not implemented: there is no safe atomic
-  swap in v0.1-pre without more lock machinery.
+  swap in v0.1.0-alpha without more lock machinery.
 - `export_jsonl` writes one JSON line per live key, sorted by key, with
   base64 of both key and value. It uses `safeatomic_rs::write_atomic`
   for the final write.
-- Tests: 18 unit tests in `src/*` + 12 RecordLog integration tests + 9
-  DataWal integration tests + 3 cross-cutting integration tests
-  (`cargo test --workspace` → 42 passed).
+- Tests (58 total, `cargo test --workspace` green):
+  - 21 unit tests in `src/*` (12 `format`, 4 `segment`, 4 `lock`, plus
+    a compile-time const-assert block in `record_log`).
+  - 14 integration tests in `tests/record_log.rs`.
+  - 9 in `tests/datawal.rs`.
+  - 3 in `tests/integration.rs`.
+  - 11 in `tests/corpus_fixtures.rs` (see TD-014).
 - Out of scope (unchanged): CAS, PyO3, compression, async, server,
-  multi-writer, query.
+  multi-writer, query, reader API.
+
+## TD-013 — Formal models with TLA+ / TLC
+- **Status:** accepted
+- Three small TLA+ models live under `formal/` and are model-checked
+  with TLC 2.19+:
+  - `RecordLog.tla` — append / fsync / crash; the durable record
+    sequence is a monotonic prefix of the recoverable view.
+  - `KeydirProjection.tla` — last-write-wins keydir as a deterministic
+    projection over a put/del record log; tombstone deletion;
+    put-after-delete resurrection.
+  - `Compaction.tla` — `compact_to` preserves the live keydir and
+    cannot resurrect a deleted key; the compacted log is a clean,
+    duplicate-free sequence of `Put` records.
+- Each model has its own `.cfg`, all using `CHECK_DEADLOCK FALSE`
+  because the state space is bounded by a counter (`MaxAppends` /
+  `MaxOps`); reaching the counter terminates exploration legitimately.
+- Most recent TLC outputs are committed under `formal/reports/`.
+- Wording is deliberate: this is **model-checked under documented
+  assumptions**, not "formally verified". The models do **not** check
+  the Rust implementation; they pin the intended protocol.
+- A `ReadWhileWrite` model is deferred until there is a real reader
+  API to model.
+
+## TD-014 — Wire-format corpus
+- **Status:** accepted
+- A binary corpus of fixtures lives at
+  `crates/datawal-core/tests/corpus/`. Each subdirectory is one
+  fixture (one or more `.dwal` segment files). A README in the corpus
+  directory documents each fixture's content and expected behaviour.
+- Fixtures freeze the v0.1 on-disk format: any unintended change to
+  encoding / framing / CRC behaviour breaks the corpus tests
+  (`tests/corpus_fixtures.rs`, 11 tests).
+- Fixtures are regenerated only on demand via the example
+  `cargo run -p datawal-core --example gen_corpus`. The generator uses
+  the normal writer plus targeted byte-flips for the corruption
+  fixtures (`bad_crc`, `unknown_version`, `truncated_tail`).
+- Tests cover: valid scan, idempotent `scan()`, idempotent reopen,
+  tail-truncation recovery via `RecoveryReport`, hard error on CRC
+  mismatch in a closed segment, hard error on unknown wire version,
+  LWW projection of the `delete_tombstone` fixture, presence/absence
+  of tombstones in the `compact_to_output` fixture, and reopen
+  determinism across valid fixtures.

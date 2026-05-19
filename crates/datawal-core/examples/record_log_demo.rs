@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     let mut log = RecordLog::open(&dir)?;
 
     // Append 3 raw payloads.
-    let payloads: &[&[u8]] = &[b"hello", b"world", b"datawal v0.1-pre"];
+    let payloads: &[&[u8]] = &[b"hello", b"world", b"datawal v0.1.0-alpha"];
     for payload in payloads {
         let r = log.append(payload)?;
         println!(

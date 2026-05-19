@@ -38,7 +38,7 @@
 //!
 //! ## Wire format
 //!
-//! See [`format`] for the byte-exact specification. Each record is a 24-byte
+//! See [`mod@format`] for the byte-exact specification. Each record is a 24-byte
 //! header + key + payload + 4-byte CRC trailer. Multi-byte integers are
 //! little-endian.
 //!
