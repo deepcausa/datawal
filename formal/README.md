@@ -1,59 +1,106 @@
 # datawal — formal specifications
 
-This directory will hold TLA+ specifications for datawal's core protocols.
-**No models are implemented in v0.1-pre.** The protocol shipped in
-v0.1-pre is the *target* of these specifications, not a result of them.
-A future release must check at least `RecordLog.tla` before any
-wire-format-breaking change to the v0.1-pre protocol is accepted.
+This directory holds TLA+ specifications for datawal's core protocols.
 
-## Planned models
+These models are **small, finite, and deliberately minimal**. They are
+"model-checked under documented assumptions" — they are not a proof of
+correctness of the Rust implementation, and the project does not claim
+"formal verification". Their purpose is to:
+
+1. Pin the protocol intent in a precise, machine-checkable form.
+2. Catch obvious mistakes before they reach the wire format.
+3. Survive future refactors: any wire-format-breaking change must keep
+   the corresponding model checked.
+
+## Models in this release (v0.1-pre)
 
 ### `RecordLog.tla`
+
+Models the append-only record log, fsync, crash, and prefix recovery.
+
+- **Variables:** `appended` (set), `buffered`/`durable` (sequences),
+  `appendCount`, `crashed`.
+- **Actions:** `DoAppend(r)`, `DoFsync`, `DoCrash`.
 - **Invariants:**
-  - Every record observable via `scan` was returned by a prior `append`.
-  - The set of records observable after a crash is a *prefix* of the
-    sequence of completed appends.
-  - CRC failure truncates the log to the last valid offset; no record after
-    that point is ever observable again.
-- **Actions:** `Append`, `Fsync`, `Crash`, `Reopen`, `Scan`.
+  - `TypeInvariant`
+  - `NoPartialRecordApplied` — `durable` is a prefix of the recoverable view.
+  - `PrefixRecovery` — fsync only extends `durable` (monotonic).
+  - `NoSpuriousRecord` — every record in `durable` was previously appended.
 
 ### `KeydirProjection.tla`
+
+Models the keydir as a deterministic last-write-wins projection over a
+sequence of put/del records.
+
+- **Variables:** `log` (sequence of `<<"put",k,v>>` or `<<"del",k>>`).
+- **Actions:** `DoPut(k,v)`, `DoDel(k)`.
 - **Invariants:**
-  - For each key `k`, `DataWal::get(k)` returns the value of the *latest*
-    write for `k` that precedes a tombstone or — if no tombstone — the
-    latest write overall.
-  - `contains_key(k)` matches `get(k).is_some()`.
-  - The projection of the log equals the projection of the in-memory keydir.
-- **Actions:** `Put`, `Delete`, `Get`, `Rebuild`.
+  - `KeydirIsProjection`
+  - `LastWriteWins`
+  - `TombstoneDeletion`
+  - `PutAfterDeleteResurrectsNewValue`
 
 ### `Compaction.tla`
+
+Models `compact_to` as a function from a source log to a new log
+containing exactly one put per live key and no tombstones.
+
+- **Variables:** `log`, `compactedLog`, `compacted`.
+- **Actions:** `DoPut(k,v)`, `DoDel(k)`, `DoCompact`.
 - **Invariants:**
-  - The projection before compaction equals the projection after compaction.
-  - Compaction is restartable: a crash at any point leaves a log whose
-    projection equals one of the two valid endpoints.
-  - No record is lost: every key present pre-compaction is present
-    post-compaction (unless tombstoned).
-- **Actions:** `BeginCompaction`, `WriteCompactedSegment`, `SwapManifest`,
-  `Crash`, `Recover`.
+  - `TypeInvariant`
+  - `CompactionPreservesLiveState` — projections agree.
+  - `NoDeletedKeyResurrection`
+  - `ExportCleanCorrectness` — no tombstones, no duplicate keys.
 
-### `ReadWhileWrite.tla`
-- **Invariants:**
-  - A reader started at time `t0` sees a consistent snapshot: the set of
-    records committed at or before `t0`.
-  - A writer never invalidates a reader's view mid-scan.
-  - `rotate` is observable to readers only after it completes.
-- **Actions:** `BeginScan`, `Append`, `Rotate`, `EndScan`.
+## What is NOT modelled in this release
 
-## Order of work
+- **`ReadWhileWrite.tla`** — concurrent scan and append. Deferred until a
+  reader API beyond `scan(&mut self)` exists.
+- Multi-writer coordination (datawal is single-writer per directory).
+- Filesystem-level details (real `fsync`, page cache).
+- CAS / blob store integration (deferred to v0.2).
 
-1. `RecordLog.tla` first — everything else builds on it.
-2. `KeydirProjection.tla` once `RecordLog` checks.
-3. `Compaction.tla` once the projection is fixed.
-4. `ReadWhileWrite.tla` last; it constrains the public API more than the
-   on-disk format.
+## How to run
 
-## Tooling
+The models target [TLC](https://github.com/tlaplus/tlaplus/) (TLA+ tools
+2.19 or later). With `tla2tools.jar` available somewhere on disk:
 
-- TLC for model checking small finite instances.
-- Apalache as a stretch goal for symbolic checks.
-- Models live in `formal/`. Output of model runs is not committed.
+```sh
+cd apps/datawal/formal
+
+java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
+  -workers 2 -config RecordLog.cfg RecordLog.tla
+
+java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
+  -workers 2 -config KeydirProjection.cfg KeydirProjection.tla
+
+java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
+  -workers 2 -config Compaction.cfg Compaction.tla
+```
+
+The default configs use very small constants (2 keys, 2 values, 4 ops)
+so each model finishes in well under a second. Increase
+`MaxAppends` / `MaxOps` to widen coverage at the cost of time.
+
+## Reports
+
+The most recent TLC output for each model is stored under
+`formal/reports/`:
+
+- `reports/RecordLog.txt`
+- `reports/KeydirProjection.txt`
+- `reports/Compaction.txt`
+
+These are committed only as a convenience; the source of truth is the
+`.tla` / `.cfg` files, plus whatever you re-run locally.
+
+## Caveats
+
+- Model checking the abstract specs does not check the Rust
+  implementation. The Rust tests under `crates/datawal-core/tests/` and
+  the corpus fixtures are the implementation-level verification.
+- The models are deliberately small; they are aimed at catching
+  protocol-level mistakes, not exhaustive enumeration of large states.
+- `CHECK_DEADLOCK FALSE` is set in every config because the models
+  legitimately reach quiescent states once their op counter saturates.
