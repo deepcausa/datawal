@@ -14,9 +14,9 @@ A log of choices, not yet a design document. Each entry has a status:
 ## TD-002 — Filesystem primitives extracted to `safeatomic-rs`
 - **Status:** historical (superseded by TD-011)
 - The six atomic FS primitives originated from prior Rust work and were
-  copied verbatim into this workspace. They first lived in
-  `crates/datawal-io/src/lib.rs` and then moved to the sibling crate
-  `apps/safeatomic-rs/src/lib.rs`.
+  copied verbatim into this workspace. They first lived in a local
+  `datawal-io` crate and then moved to the sibling crate
+  [`safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs).
 - Function names and bodies are preserved 1:1 in `safeatomic-rs`. Exported
   symbols:
   - `write_atomic`
@@ -35,13 +35,11 @@ A log of choices, not yet a design document. Each entry has a status:
   to `safeatomic-rs` (which now hosts the primitives) as well as to
   `datawal-core`.
 
-## TD-004 — No `path =` dependencies pointing outside `datawal/` or its allowed siblings
-- **Status:** accepted (revised in TD-011)
-- The datawal workspace must remain self-contained. Reuse of external code
-  happens via `/bin/cp`, not via Cargo path dependencies — with the single
-  exception called out in TD-011: when `datawal-core` starts performing real
-  I/O it will take a `path = "../../safeatomic-rs"` dependency on the
-  `safeatomic-rs` sibling crate. No other path dependencies are permitted.
+## TD-004 — No `path =` dependencies pointing outside `datawal/`
+- **Status:** superseded by TD-011 and the publication of
+  `safeatomic-rs` on crates.io. As of `v0.1.0-alpha.1`, `datawal`
+  consumes `safeatomic-rs` as a regular crates.io dependency. No
+  path dependencies are used.
 
 ## TD-005 — `datawal-core` v0.0.1 was intentionally inert
 - **Status:** historical (superseded by TD-012)
@@ -120,9 +118,11 @@ A log of choices, not yet a design document. Each entry has a status:
 
 ## TD-011 — Atomic FS primitives extracted to `safeatomic-rs`
 - **Status:** accepted
-- The crate `datawal-io` introduced at bootstrap has been removed and its
-  contents extracted to a separate, single-crate repository
-  `apps/safeatomic-rs/` (crate name `safeatomic-rs`, edition 2021).
+- The `datawal-io` crate introduced at bootstrap has been removed and
+  its contents extracted to a separate, single-crate repository
+  [`safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs)
+  (crate name `safeatomic-rs`, edition 2021), now published on
+  crates.io.
 - Rationale: the six primitives are generic POSIX filesystem operations and
   are useful outside datawal (a future `datawal-cas`, other consumers,
   external users). Keeping them inside the datawal workspace would
@@ -131,10 +131,8 @@ A log of choices, not yet a design document. Each entry has a status:
 - `safeatomic-rs` is the Rust sibling of the Python `safeatomic` package.
   It is not a binding, not an FFI wrapper, and not an API mirror — the
   two crates share intent and surface only.
-- `datawal-core` does **not** depend on `safeatomic-rs` at v0.0.1, because
-  no I/O is yet performed. The dependency will be added when `RecordLog`
-  starts writing manifests/segments. Path: `safeatomic-rs = { path =
-  "../../../safeatomic-rs" }` (relative from `crates/datawal-core/`).
+- `datawal` consumes `safeatomic-rs` as a regular crates.io dependency
+  (`safeatomic-rs = "0.1"` in `Cargo.toml`).
 - `write_append_fsync` in `safeatomic-rs` is documented as a **primitive**,
   not a framed log: record framing, CRC, segmentation, and recovery remain
   datawal's responsibility.
@@ -145,7 +143,7 @@ A log of choices, not yet a design document. Each entry has a status:
   `segment` (segment naming and listing), `lock` (fs2 fd-based advisory
   lock), `record_log` (RecordLog), `datawal` (DataWal KV).
 - Dependencies (runtime): `anyhow`, `crc32c`, `fs2`, `serde`,
-  `serde_json`, `base64`, `safeatomic-rs` (path). Dev: `tempfile`.
+  `serde_json`, `base64`, `safeatomic-rs` (crates.io). Dev: `tempfile`.
 - `RecordLog` is `&mut self` for writes and rescans on `scan()`;
   payloads are returned in full as `Vec<u8>` (no zero-copy in
   v0.1.0-alpha).

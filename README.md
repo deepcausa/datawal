@@ -24,7 +24,9 @@ optional last-write-wins `DataWal` KV projection.
   JSONL file (base64-encoded keys and values) via an atomic write.
 - **FS plumbing in a sibling crate.** Atomic POSIX primitives
   (`write_atomic`, `write_once`, `write_append_fsync`, `rename_atomic`,
-  `fsync_dir`) live in [`safeatomic-rs`](../safeatomic-rs/).
+  `fsync_dir`) live in
+  [`safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs)
+  ([crates.io](https://crates.io/crates/safeatomic-rs)).
 
 ## When to use
 
@@ -171,7 +173,9 @@ datawal/
 └── dev/                            # gitignored; internal notes only
 ```
 
-`safeatomic-rs` lives at `../safeatomic-rs/` and is not part of this workspace.
+`safeatomic-rs` is published separately on crates.io and consumed via
+`Cargo.toml`; it is not part of this repository's source tree. See
+[`github.com/deepcausa/safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs).
 
 ## Running
 

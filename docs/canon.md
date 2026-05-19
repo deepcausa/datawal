@@ -122,14 +122,15 @@ Binding decisions. These hold until explicitly retracted in this file.
 
 15. **Filesystem primitives live in `safeatomic-rs`.**
     Atomic POSIX operations are owned by the sibling crate
-    `safeatomic-rs` (at `apps/safeatomic-rs/`). `datawal-core` depends on
-    it via `path = "../../../safeatomic-rs"` and uses `write_atomic` for
-    JSONL export and `fsync_dir` after creating segments and during
-    `fsync()`. This split keeps generic FS plumbing out of the datawal
-    public surface and makes those primitives reusable by other
-    consumers (e.g. a future `datawal-cas`). `write_append_fsync` in
-    `safeatomic-rs` is a **primitive**, not a WAL: datawal owns record
-    framing, CRC, segmentation, and recovery.
+    [`safeatomic-rs`](https://github.com/deepcausa/safeatomic-rs),
+    published on crates.io. `datawal` depends on it through
+    `Cargo.toml` and uses `write_atomic` for JSONL export and
+    `fsync_dir` after creating segments and during `fsync()`. This
+    split keeps generic FS plumbing out of the datawal public
+    surface and makes those primitives reusable by other consumers
+    (e.g. a future `datawal-cas`). `write_append_fsync` in
+    `safeatomic-rs` is a **primitive**, not a WAL: datawal owns
+    record framing, CRC, segmentation, and recovery.
 
 ## v0.1-pre KV semantics
 
