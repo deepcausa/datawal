@@ -1,4 +1,4 @@
-//! `datawal-core` — append-only framed record log and bytes-based KV (v0.1-pre).
+//! `datawal` — append-only framed record log and bytes-based KV (v0.1-pre).
 //!
 //! ## What this crate is
 //!
@@ -45,7 +45,7 @@
 //! ## Filesystem primitives
 //!
 //! Atomic FS operations (`write_atomic`, `fsync_dir`, `rename_atomic`, etc.)
-//! live in the sibling crate [`safeatomic_rs`]. `datawal-core` consumes them;
+//! live in the sibling crate [`safeatomic_rs`]. `datawal` consumes them;
 //! it does not redefine them.
 
 #![forbid(unsafe_code)]

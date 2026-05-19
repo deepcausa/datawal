@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p datawal-core --example datawal_kv_demo
+//! cargo run -p datawal --example datawal_kv_demo
 //! ```
 //!
 //! `DataWal` is a last-write-wins, bytes-first KV layered on top of
@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use datawal_core::DataWal;
+use datawal::DataWal;
 
 fn main() -> Result<()> {
     let dir: PathBuf = std::env::temp_dir().join("datawal-kv-demo");

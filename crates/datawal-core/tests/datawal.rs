@@ -2,7 +2,7 @@
 //!
 //! Covers the 9 cases required by the v0.1-pre spec.
 
-use datawal_core::DataWal;
+use datawal::DataWal;
 use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------

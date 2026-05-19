@@ -4,8 +4,8 @@
 //! Run from the workspace root:
 //!
 //! ```text
-//! cargo run -p datawal-core --example gen_corpus
-//! cargo run -p datawal-core --example gen_corpus -- /tmp/corpus-check
+//! cargo run -p datawal --example gen_corpus
+//! cargo run -p datawal --example gen_corpus -- /tmp/corpus-check
 //! ```
 //!
 //! Without arguments, fixtures are written to the in-tree corpus location.
@@ -23,10 +23,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datawal_core::{DataWal, RecordLog};
+use datawal::{DataWal, RecordLog};
 
 fn corpus_root_default() -> PathBuf {
-    // examples/ lives next to Cargo.toml of datawal-core.
+    // examples/ lives next to Cargo.toml of the datawal crate.
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     crate_dir.join("tests").join("corpus")
 }

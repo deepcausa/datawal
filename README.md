@@ -86,7 +86,7 @@ What is not in:
 ## Quick start
 
 ```rust
-use datawal_core::{RecordLog, DataWal};
+use datawal::{RecordLog, DataWal};
 use std::path::Path;
 
 // --- RecordLog ---
@@ -175,9 +175,9 @@ datawal/
 cargo fmt --all
 cargo check --workspace
 cargo test --workspace
-cargo run -p datawal-core --example record_log_demo
-cargo run -p datawal-core --example datawal_kv_demo
-cargo run -p datawal-core --example tail_recovery_demo
+cargo run -p datawal --example record_log_demo
+cargo run -p datawal --example datawal_kv_demo
+cargo run -p datawal --example tail_recovery_demo
 cargo doc --workspace --no-deps
 ```
 
@@ -199,7 +199,7 @@ does not check the Rust implementation. See `formal/README.md`.
 v0.1 on-disk format. Regenerate only when the format changes intentionally:
 
 ```sh
-cargo run -p datawal-core --example gen_corpus
+cargo run -p datawal --example gen_corpus
 ```
 
 See `crates/datawal-core/tests/corpus/README.md`.

@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p datawal-core --example tail_recovery_demo
+//! cargo run -p datawal --example tail_recovery_demo
 //! ```
 //!
 //! Scenario simulated:
@@ -27,7 +27,7 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use datawal_core::RecordLog;
+use datawal::RecordLog;
 
 fn main() -> Result<()> {
     let dir: PathBuf = std::env::temp_dir().join("datawal-tail-recovery-demo");

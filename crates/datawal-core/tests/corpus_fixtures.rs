@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use datawal_core::{DataWal, RecordLog, RecordType};
+use datawal::{DataWal, RecordLog, RecordType};
 use tempfile::TempDir;
 
 fn corpus_root() -> PathBuf {

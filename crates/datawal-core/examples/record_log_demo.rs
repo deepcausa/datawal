@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p datawal-core --example record_log_demo
+//! cargo run -p datawal --example record_log_demo
 //! ```
 //!
 //! This example writes a few raw records to a temporary directory,
@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use datawal_core::RecordLog;
+use datawal::RecordLog;
 
 fn main() -> Result<()> {
     // Use a fresh subdirectory under the OS temp dir.

@@ -3,8 +3,8 @@
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 
-use datawal_core::format::HEADER_LEN;
-use datawal_core::{DataWal, RecordLog, RecordType};
+use datawal::format::HEADER_LEN;
+use datawal::{DataWal, RecordLog, RecordType};
 use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------

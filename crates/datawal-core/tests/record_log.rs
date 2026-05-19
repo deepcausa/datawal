@@ -7,8 +7,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 
-use datawal_core::format::{HEADER_LEN, MAX_KEY_LEN};
-use datawal_core::{RecordLog, RecordType};
+use datawal::format::{HEADER_LEN, MAX_KEY_LEN};
+use datawal::{RecordLog, RecordType};
 use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------

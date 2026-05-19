@@ -62,7 +62,7 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
 
   publish-dry-run:
-    name: cargo publish --dry-run (datawal-core)
+    name: cargo publish --dry-run (datawal)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
           key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
 
       - name: cargo publish --dry-run
-        run: cargo publish --dry-run -p datawal-core
+        run: cargo publish --dry-run -p datawal
 
   formal:
     name: formal (TLC on RecordLog / KeydirProjection / Compaction)
@@ -170,7 +170,7 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/corpus-check
           mkdir -p /tmp/corpus-check
-          cargo run -p datawal-core --example gen_corpus -- /tmp/corpus-check
+          cargo run -p datawal --example gen_corpus -- /tmp/corpus-check
 
       - name: Compare against in-tree corpus via sha256
         run: |
@@ -203,7 +203,7 @@ jobs:
             echo
             echo "ERROR: wire-format corpus drifted."
             echo "If this drift is intentional, run:"
-            echo "  cargo run -p datawal-core --example gen_corpus"
+            echo "  cargo run -p datawal --example gen_corpus"
             echo "and commit the updated fixtures under crates/datawal-core/tests/corpus/."
             exit 1
           fi
