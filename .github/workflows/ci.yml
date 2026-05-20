@@ -258,12 +258,13 @@ jobs:
 
       - name: cargo fuzz build
         working-directory: fuzz
-        # `--` forwards to `cargo build`; `--locked` enforces the committed
-        # `fuzz/Cargo.lock`, which pins `getrandom` to 0.3.4 (the 0.4.x line
-        # requires `edition2024` and is unparseable by cargo 1.82 / nightly
-        # 2024-08-01). Mirrors the workspace MSRV pin documented in
-        # `AGENTS.md`.
-        run: cargo fuzz build -- --locked
+        # `cargo fuzz build` does not forward `--locked` to inner `cargo
+        # build`, but cargo honours the committed `fuzz/Cargo.lock` by
+        # default unless a manifest change forces a re-resolve. The lock
+        # pins `getrandom` to 0.3.4 (the 0.4.x line requires
+        # `edition2024` and is unparseable by cargo 1.82 / nightly
+        # 2024-08-01). Mirrors the workspace MSRV pin in `AGENTS.md`.
+        run: cargo fuzz build
 
   release:
     name: cargo publish (datawal)

@@ -41,16 +41,18 @@ is the one CI uses.
 
 ```sh
 cd fuzz
-cargo +nightly fuzz build -- --locked
+cargo +nightly fuzz build
 ```
 
-This compiles all three targets. CI runs the same `--locked` build
-on a nightly job; it does not run the fuzzers.
+This compiles all three targets. CI runs the same build on a
+nightly job; it does not run the fuzzers.
 
 `fuzz/Cargo.lock` is committed and pins `getrandom` to `0.3.4`
 (pulled in via `tempfile`); the `0.4.x` series declares
-`edition = "2024"` and is unparseable by cargo 1.82. This mirrors
-the workspace pin documented in `AGENTS.md`.
+`edition = "2024"` and is unparseable by cargo 1.82. Cargo honours
+the committed lockfile by default; `cargo fuzz build` does not
+forward `--locked` to inner `cargo build`, so the pin is enforced
+implicitly. This mirrors the workspace pin documented in `AGENTS.md`.
 
 ## Run
 
