@@ -3,6 +3,12 @@ resolver = "2"
 members = [
     "crates/datawal-core",
 ]
+# `fuzz/` is a separate crate using `cargo-fuzz` (libFuzzer + nightly).
+# It is intentionally outside the workspace so `cargo check --workspace`
+# and the MSRV 1.75 CI job do not try to build it. See `fuzz/README.md`.
+exclude = [
+    "fuzz",
+]
 
 [workspace.package]
 version = "0.1.0-alpha.1"

@@ -225,6 +225,33 @@ jobs:
           path: /tmp/corpus-check
           if-no-files-found: ignore
 
+  fuzz-build:
+    name: fuzz build (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/datawal-core/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: cargo fuzz build
+        working-directory: fuzz
+        run: cargo +nightly fuzz build
+
   release:
     name: cargo publish (datawal)
     needs: [rust, publish-dry-run, formal, corpus]

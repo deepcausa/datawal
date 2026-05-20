@@ -89,6 +89,39 @@ What is not in:
 - In-place compaction.
 - Reader API / concurrent reads.
 
+## Limits
+
+datawal stores **arbitrary byte payloads** within fixed static limits.
+Neither the `RecordLog` nor the `DataWal` projection interprets the
+bytes — no JSON, no UTF-8, no MessagePack parsing in the core.
+
+| Limit                              | Value           |
+| ---------------------------------- | --------------- |
+| Maximum key size                   | 64 KiB (65 536) |
+| Maximum payload size per record    | 64 MiB          |
+| Writers per directory              | 1 (advisory lock) |
+
+What is **not** limited inside those bounds: the byte composition of
+keys and payloads. Any sequence is legal, including all-zero, all-`0xFF`,
+embedded null bytes, and arbitrary binary blobs. The
+[`roundtrip` fuzz target](fuzz/README.md) exercises this empirically.
+
+What you should be aware of:
+
+- `RecordLog::scan` materialises every record's payload into memory; a
+  streaming iterator is tracked in [issue #3](https://github.com/deepcausa/datawal/issues/3).
+- `DataWal`'s in-memory keydir currently holds live values, not just
+  offsets; converting to offset-based keydir is tracked in
+  [issue #4](https://github.com/deepcausa/datawal/issues/4).
+- There is no CAS / blob / dedup layer in the core. For payloads
+  larger than 64 MiB, store them in an external object/blob store
+  and reference them by id from datawal records, or wait for the
+  separate CAS crate tracked in [issue #7](https://github.com/deepcausa/datawal/issues/7).
+- datawal v0.1.0-alpha is **not production-ready.** It is shelf-ready,
+  formally model-checked at the protocol level, and bytewise-frozen
+  by a corpus fixture set — but workload-tested only at the unit
+  and integration level so far.
+
 ## Quick start
 
 ```rust
@@ -239,6 +272,23 @@ DATAWAL_BENCH_DIR=/mnt/nvme/datawal-bench cargo bench -p datawal --bench record_
 ```
 
 When `DATAWAL_BENCH_DIR` is unset, benches fall back to the system tempdir.
+
+## Fuzzing
+
+A small [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz) crate
+lives at [`fuzz/`](fuzz/README.md) (outside the workspace, nightly-only).
+Three targets cover the wire-format decoder, segment-level recovery,
+and the `DataWal` put/get roundtrip:
+
+```sh
+cargo install cargo-fuzz
+just fuzz-build              # compile every target on nightly
+just fuzz-run-decode         # primary decoder target, 30s
+just fuzz-run-scan           # RecordLog::open smoke, 30s
+just fuzz-run-roundtrip      # DataWal put/get bytes-in == bytes-out, 30s
+```
+
+CI verifies the targets *compile* on nightly; it does not run them.
 
 ## Formal models
 

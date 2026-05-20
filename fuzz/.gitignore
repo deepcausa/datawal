@@ -1,0 +1,5 @@
+# cargo-fuzz local outputs. Crashes and slow inputs are local artifacts.
+/target
+/corpus
+/artifacts
+/coverage

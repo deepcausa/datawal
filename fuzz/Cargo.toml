@@ -1,0 +1,39 @@
+[package]
+name = "datawal-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+
+[dependencies.datawal]
+path = "../crates/datawal-core"
+
+# Each fuzz target compiles as its own binary. `test = false` and
+# `doc = false` keep `cargo test` / `cargo doc` from trying to build
+# the libFuzzer harness, which only links under nightly.
+[[bin]]
+name = "decode_frame"
+path = "fuzz_targets/decode_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scan_log"
+path = "fuzz_targets/scan_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
