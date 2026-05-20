@@ -59,6 +59,10 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-targets
 
+      - name: cargo bench --no-run
+        if: matrix.toolchain == 'stable'
+        run: cargo bench --workspace --no-run
+
       - name: cargo doc
         if: matrix.toolchain == 'stable'
         run: cargo doc --workspace --no-deps
