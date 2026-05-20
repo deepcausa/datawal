@@ -189,6 +189,57 @@ cargo run -p datawal --example tail_recovery_demo
 cargo doc --workspace --no-deps
 ```
 
+## Benchmarks
+
+datawal ships [Criterion](https://github.com/bheisler/criterion.rs) benches
+under `crates/datawal-core/benches/`:
+
+- `record_log` — `RecordLog::append` (no fsync and fsync-per-append) across
+  payload sizes, plus `RecordLog::scan` throughput.
+- `datawal_kv` — `DataWal::put / get / delete` as a function of keydir size,
+  plus `DataWal::open` (keydir rebuild) cost.
+- `compaction` — `DataWal::compact_to` and `DataWal::export_jsonl` against
+  delete-heavy and overwrite-heavy logs at varying live-key ratios.
+- `recovery` — `RecordLog::open` + `recovery_report` cost vs. log size,
+  segment count, and partially-truncated tail length.
+
+Run them all:
+
+```sh
+cargo bench --workspace
+```
+
+Or one bench at a time:
+
+```sh
+cargo bench -p datawal --bench record_log
+cargo bench -p datawal --bench datawal_kv
+cargo bench -p datawal --bench compaction
+cargo bench -p datawal --bench recovery
+```
+
+Numbers from any single run are not committed as truth: results depend on
+machine, kernel, filesystem, and storage, and small numbers compared across
+machines mislead more than they help. CI only verifies that the benches
+*compile* (`cargo bench --workspace --no-run`); it does not run them.
+
+For methodology, how to read Criterion output, gotchas (especially around
+fsync), and what is *not* measured, see [`docs/benchmarks.md`](docs/benchmarks.md).
+
+For an order-of-magnitude reference run with generic stack description, see
+[`docs/benchmarks/v0.1.0-alpha-reference.md`](docs/benchmarks/v0.1.0-alpha-reference.md).
+
+**fsync benches need a real local disk.** On Linux, `/tmp` is often tmpfs and
+overlayfs / NFS likewise lie about durability — fsync numbers from those
+filesystems are not meaningful. Point the benches at a real SSD/NVMe local
+filesystem via:
+
+```sh
+DATAWAL_BENCH_DIR=/mnt/nvme/datawal-bench cargo bench -p datawal --bench record_log
+```
+
+When `DATAWAL_BENCH_DIR` is unset, benches fall back to the system tempdir.
+
 ## Formal models
 
 Three small TLA+ models live under `formal/` and are checked with
