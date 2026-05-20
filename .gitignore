@@ -5,3 +5,12 @@ Cargo.lock.bak
 # dev/ holds internal dogfood notes that reference private codebases.
 # Never published. See dev/README.md.
 /dev/
+
+# TLC writes per-run state directories under formal/states/<timestamp>/.
+# Large, ephemeral, and machine-specific.
+/formal/states/
+
+# TLC report snapshots used to live in formal/reports/. They leaked
+# host fingerprint (OS / kernel / JRE version / pid) and are not
+# referenced by CI. Logs are uploaded as the tlc-logs CI artifact.
+/formal/reports/

@@ -85,15 +85,9 @@ so each model finishes in well under a second. Increase
 
 ## Reports
 
-The most recent TLC output for each model is stored under
-`formal/reports/`:
-
-- `reports/RecordLog.txt`
-- `reports/KeydirProjection.txt`
-- `reports/Compaction.txt`
-
-These are committed only as a convenience; the source of truth is the
-`.tla` / `.cfg` files, plus whatever you re-run locally.
+TLC output is not committed to the repo. To inspect a run, either
+re-run locally (commands above) or download the `tlc-logs` artifact
+that CI uploads on every run of `.github/workflows/ci.yml`.
 
 ## Caveats
 
