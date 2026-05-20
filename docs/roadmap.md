@@ -7,9 +7,16 @@ versions.
 It is the binding scope statement for the current cut. Anything not
 listed under "Inside v0.1.0-alpha" should be assumed **not implemented**.
 
-**v0.1.0-alpha: shipped locally, tagged (`git tag v0.1.0-alpha`), no remote
-push, not published to crates.io.** The core protocol is frozen. See the
-"Protocol freeze" note after the one-line cut below.
+**v0.1.0-alpha is public on crates.io** as an alpha release
+(`0.1.0-alpha` and `0.1.0-alpha.1`). The core protocol is frozen. See
+the "Protocol freeze" note after the one-line cut below.
+
+Two pieces of post-v0.1.0-alpha plumbing have already landed on `main`
+without changing the in-scope surface or the wire format: Criterion
+benchmarks under `crates/datawal-core/benches/` (issue #1, PR #15) and a
+`cargo-fuzz` harness under `fuzz/` (issue #2). The in-scope sections below
+describe the v0.1.0-alpha *release*; current tracked work lives in the
+"Public roadmap issues" section.
 
 The goal of v0.1.0-alpha is to be small, correct, recoverable, and
 useful for plain append-only logs and tiny local key/value state. It is
@@ -385,9 +392,13 @@ Hardening the Rust library for real workloads and publication:
 - `fdatasync` / `fsync_policy` if a real workload demands it.
 - Streaming `scan` that does not allocate the full record list.
 - Keydir by offset (not by full value) to reduce memory pressure.
-- In-place `compact()` — only when it can be made obviously safe.
 - Reader API (cursor / snapshot), then `ReadWhileWrite` TLA+ model.
 - `cargo publish` to crates.io.
+
+Future compaction work must remain snapshot/replace-style unless a new
+protocol, corpus update and formal model explicitly accept otherwise.
+In-place mutation of existing segment files is not part of the current
+roadmap.
 
 ### Track B — Python visibility track
 
@@ -411,6 +422,34 @@ Decision pending: Track A (Rust production) or Track B (Python visibility) first
 The two tracks are independent. Track B can start without Track A being
 complete. Track A does not require Python. The order depends on where the
 first real consumer is.
+
+---
+
+## Public roadmap issues
+
+The list below mirrors what is actually tracked on GitHub. This document
+is the consolidated picture; each issue is the executable unit. If the
+two disagree, the issues win — please open a PR against this section.
+
+| Issue                                                                                          | Track       | Status          | Notes                                                                            |
+| ---------------------------------------------------------------------------------------------- | ----------- | --------------- | -------------------------------------------------------------------------------- |
+| [#1](https://github.com/deepcausa/datawal/issues/1) Benchmark `RecordLog` and `DataWal`        | Track A     | done (PR #15)   | Criterion benches under `crates/datawal-core/benches/`; CI runs `--no-run` only. |
+| [#2](https://github.com/deepcausa/datawal/issues/2) Fuzz the wire-format decoder               | Track A     | in progress     | `cargo-fuzz` harness under `fuzz/`; targets `format::decode_frame` + roundtrip.  |
+| [#3](https://github.com/deepcausa/datawal/issues/3) Streaming `scan` iterator                  | Track A     | open            | Add `scan_iter`; keep `scan()` until the next minor bump.                        |
+| [#4](https://github.com/deepcausa/datawal/issues/4) Keydir by offset, not full values          | Track A     | open            | `HashMap<Vec<u8>, RecordRef>`; CRC verify on `get` is non-negotiable.            |
+| [#5](https://github.com/deepcausa/datawal/issues/5) Reader API + `ReadWhileWrite` model        | Track A     | open            | Snapshot reader first, tailing later. Builds on #3. Wires new TLA+ model in CI.  |
+| [#6](https://github.com/deepcausa/datawal/issues/6) Python bindings via PyO3                   | Track B     | open            | PyO3 + maturin, bytes-first surface; alpha to PyPI.                              |
+| [#7](https://github.com/deepcausa/datawal/issues/7) CAS / blob storage is a separate crate     | scope       | open            | Out of scope for `datawal-core`. Separate crate consumes `safeatomic-rs`.        |
+| [#8](https://github.com/deepcausa/datawal/issues/8) Crash injection + soak testing             | Track A     | open            | `xtask` SIGKILLs writer at append / rotate / compact points; soak 1–4h.          |
+| [#9](https://github.com/deepcausa/datawal/issues/9) Durability policy + group commit           | Track A     | open            | `FsyncPolicy` enum. Bench before adding a background thread.                     |
+| [#10](https://github.com/deepcausa/datawal/issues/10) Preallocated segments                    | Track A     | open            | Reduce append latency variance; scanner must distinguish unused vs torn.         |
+| [#11](https://github.com/deepcausa/datawal/issues/11) `append_batch` / multi-record entries    | Track A     | exploratory     | Shared fsync boundary for related records. **Not** a SQL transaction.            |
+| [#12](https://github.com/deepcausa/datawal/issues/12) WAL-engine features and related work     | scope       | open (notes)    | Reference list (incl. `okaywal`). Features adopted only when justified.          |
+| [#13](https://github.com/deepcausa/datawal/issues/13) Guardrails: datawal is JSONL, not a DB   | scope       | open (charter)  | Canonical scope statement; SQL / query / multi-writer / server remain non-goals. |
+| [#14](https://github.com/deepcausa/datawal/issues/14) Derived tag index for simple filtering   | exploratory | open (research) | Must remain a deterministic projection. No SQL drift, no general indexes.        |
+
+Bodies on GitHub stay authoritative for acceptance criteria and open
+questions. This table only records track, status and the one-line cut.
 
 ---
 
@@ -458,7 +497,6 @@ what real workloads reveal. Plausible items:
 
 - A `JsonCodec<T>` helper crate on top of the bytes core.
 - PyO3 bindings (Track B).
-- A real `compact()` in place — only if it can be made obviously safe.
 - A `ReadWhileWrite` TLA+ model alongside a real reader API (Track A).
 - Optional `zstd` per-record compression (uses one bit in `flags`).
 - Group commit / `fsync_policy` if a real workload demands it.

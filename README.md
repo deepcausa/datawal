@@ -54,12 +54,13 @@ optional last-write-wins `DataWal` KV projection.
 
 ## Current status
 
-**datawal is currently `v0.1.0-alpha`: functional and model-checked at
-the protocol level, but not production-ready.**
+**datawal is currently an alpha crate:** functional and model-checked at
+the protocol level, but not production-ready. See
+[`docs/roadmap.md`](docs/roadmap.md) for the exact release scope.
 
-It is tagged locally (`git tag v0.1.0-alpha`), has no remote push, and has not
-been published to crates.io. It is shelf-ready: correct enough to be shelved and
-resumed later without rediscovering the protocol.
+It is published on crates.io as an alpha release; the on-disk wire format
+is frozen by a corpus fixture set, but workload coverage is still only at
+the unit and integration level.
 
 What is in:
 
@@ -91,36 +92,29 @@ What is not in:
 
 ## Limits
 
-datawal stores **arbitrary byte payloads** within fixed static limits.
-Neither the `RecordLog` nor the `DataWal` projection interprets the
-bytes — no JSON, no UTF-8, no MessagePack parsing in the core.
+`datawal` is bytes-first, but not unbounded. Neither the `RecordLog` nor
+the `DataWal` projection interprets the bytes — no JSON, no UTF-8, no
+MessagePack parsing in the core. Current alpha limits:
 
-| Limit                              | Value           |
-| ---------------------------------- | --------------- |
-| Maximum key size                   | 64 KiB (65 536) |
-| Maximum payload size per record    | 64 MiB          |
-| Writers per directory              | 1 (advisory lock) |
+| Limit              | Value / status         | Notes                                                                                                |
+| ------------------ | ---------------------: | ---------------------------------------------------------------------------------------------------- |
+| Max key size       | 64 KiB                 | Per record. Larger keys are rejected.                                                                |
+| Max payload size   | 64 MiB                 | Per record. For larger values, use an external blob store and store references.                      |
+| Writers            | Single writer          | Enforced with an advisory fd lock. No multi-writer semantics.                                        |
+| Readers            | No reader API yet      | `scan()` is the only read path; tracked in [#5](https://github.com/deepcausa/datawal/issues/5).      |
+| `scan()` memory    | `Vec<Record>`          | Not streaming yet; large logs need [#3](https://github.com/deepcausa/datawal/issues/3).              |
+| `DataWal` keydir   | values in memory       | Live values are held in the in-memory keydir; offset-based variant is [#4](https://github.com/deepcausa/datawal/issues/4). |
+| Durability         | explicit `fsync()`     | `append()` is recoverable; `append() + fsync()` is durable under documented assumptions.             |
+| Compaction         | `compact_to` only      | Snapshot-style rebuild into a target directory. No in-place `compact()`.                             |
+| CAS / blob         | not included           | Planned as a separate crate / layer; tracked in [#7](https://github.com/deepcausa/datawal/issues/7). |
+| Compression        | not included           | `flags` must be zero in v0.1.                                                                        |
+| Query              | not included           | No SQL, indexes, joins, range scans, or planner. See [#13](https://github.com/deepcausa/datawal/issues/13). |
+| Production status  | alpha                  | Functional, tested, model-checked at the protocol level; not production-ready.                       |
 
 What is **not** limited inside those bounds: the byte composition of
 keys and payloads. Any sequence is legal, including all-zero, all-`0xFF`,
 embedded null bytes, and arbitrary binary blobs. The
 [`roundtrip` fuzz target](fuzz/README.md) exercises this empirically.
-
-What you should be aware of:
-
-- `RecordLog::scan` materialises every record's payload into memory; a
-  streaming iterator is tracked in [issue #3](https://github.com/deepcausa/datawal/issues/3).
-- `DataWal`'s in-memory keydir currently holds live values, not just
-  offsets; converting to offset-based keydir is tracked in
-  [issue #4](https://github.com/deepcausa/datawal/issues/4).
-- There is no CAS / blob / dedup layer in the core. For payloads
-  larger than 64 MiB, store them in an external object/blob store
-  and reference them by id from datawal records, or wait for the
-  separate CAS crate tracked in [issue #7](https://github.com/deepcausa/datawal/issues/7).
-- datawal v0.1.0-alpha is **not production-ready.** It is shelf-ready,
-  formally model-checked at the protocol level, and bytewise-frozen
-  by a corpus fixture set — but workload-tested only at the unit
-  and integration level so far.
 
 ## Quick start
 
@@ -330,7 +324,7 @@ from them.
 
 - `docs/canon.md` — binding decisions and the byte-layout of a record.
 - `docs/technical-decisions.md` — TD-NNN entries documenting choices.
-- `docs/roadmap.md` — v0.1.0-alpha scope; what is frozen; next tracks.
+- `docs/roadmap.md` — current alpha scope, what is frozen, and the tracked roadmap issues.
 - `formal/README.md` — the TLA+ models and how to run TLC.
 
 ## License
