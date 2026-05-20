@@ -47,12 +47,12 @@ fuzz_target!(|data: &[u8]| {
     // Clamp to MAX_KEY_LEN; the rest becomes the payload.
     let body = &data[2..];
     let key_len_raw = u16::from_le_bytes([data[0], data[1]]) as usize;
-    let key_len = key_len_raw.min(body.len()).min(MAX_KEY_LEN);
+    let key_len = key_len_raw.min(body.len()).min(MAX_KEY_LEN as usize);
 
     let key = &body[..key_len];
     let payload = &body[key_len..];
 
-    if payload.len() > MAX_PAYLOAD_LEN {
+    if payload.len() > MAX_PAYLOAD_LEN as usize {
         return;
     }
 
