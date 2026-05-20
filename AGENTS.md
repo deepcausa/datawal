@@ -201,6 +201,26 @@ small one-author repo). Convention:
 If protection is added later (PR-required, status-checks gating),
 update this section.
 
+### Merge style for PRs
+
+When a PR is used (not direct push), pick squash vs rebase by
+content, never merge commit:
+
+- **Squash** when the branch contains a single logical change plus
+  incidental CI/MSRV fixups, lockfile churn, or review-feedback
+  amendments. The fixup commits have no value as separate history
+  entries; one clean commit on `main` is what future readers want.
+- **Rebase** when the branch contains multiple semantically
+  independent commits that each deserve to land on `main` as-is
+  (e.g. a refactor commit followed by a feature commit that builds
+  on it, each green by itself).
+- **Avoid merge commits** while the repo stays single-author and
+  linear. They add noise without preserving information not already
+  in the commits.
+
+The PR title becomes the squash commit subject; the PR body becomes
+the squash body. Edit both before merging if needed.
+
 ## Family of repos
 
 `datawal` is part of a small family of local persistence primitives:
