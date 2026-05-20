@@ -225,6 +225,47 @@ jobs:
           path: /tmp/corpus-check
           if-no-files-found: ignore
 
+  fuzz-build:
+    name: fuzz build (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned nightly: cargo-fuzz 0.13.1's published Cargo.lock fixes
+      # `rustix 0.36.5`, whose `rustc_attrs` cfg-gated attributes were
+      # rejected by nightly compilers from late 2024 onward. A nightly
+      # from 2024-08 still accepts those attributes and pairs cleanly
+      # with `cargo install cargo-fuzz --version 0.13.1 --locked`.
+      # Bump deliberately when both ends are known to be compatible.
+      - name: Install Rust toolchain (nightly-2024-08-01)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2024-08-01
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('fuzz/Cargo.toml', 'crates/datawal-core/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Install cargo-fuzz (pinned)
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      - name: cargo fuzz build
+        working-directory: fuzz
+        # `cargo fuzz build` does not forward `--locked` to inner `cargo
+        # build`, but cargo honours the committed `fuzz/Cargo.lock` by
+        # default unless a manifest change forces a re-resolve. The lock
+        # pins `getrandom` to 0.3.4 (the 0.4.x line requires
+        # `edition2024` and is unparseable by cargo 1.82 / nightly
+        # 2024-08-01). Mirrors the workspace MSRV pin in `AGENTS.md`.
+        run: cargo fuzz build
+
   release:
     name: cargo publish (datawal)
     needs: [rust, publish-dry-run, formal, corpus]

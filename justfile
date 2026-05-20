@@ -113,6 +113,32 @@ bench-report:
     fi
 
 # ---------------------------------------------------------------------------
+# Fuzzing
+# ---------------------------------------------------------------------------
+#
+# Requires `cargo install cargo-fuzz` and a nightly toolchain
+# (`rustup toolchain install nightly`). The fuzz crate at `fuzz/` is
+# intentionally outside the workspace; see `fuzz/README.md` for the
+# target catalogue and triage notes.
+
+# Build every fuzz target (compile only, no fuzzing).
+fuzz-build:
+    cd fuzz && cargo +nightly fuzz build
+
+# Run the primary decoder fuzz target. Override TIME for longer runs.
+# Usage: just fuzz-run-decode TIME=300
+fuzz-run-decode TIME="30":
+    cd fuzz && cargo +nightly fuzz run decode_frame -- -max_total_time={{TIME}}
+
+# Run the scan_log integration smoke target.
+fuzz-run-scan TIME="30":
+    cd fuzz && cargo +nightly fuzz run scan_log -- -max_total_time={{TIME}}
+
+# Run the DataWal put/get roundtrip target.
+fuzz-run-roundtrip TIME="30":
+    cd fuzz && cargo +nightly fuzz run roundtrip -- -max_total_time={{TIME}}
+
+# ---------------------------------------------------------------------------
 # Wire-format corpus
 # ---------------------------------------------------------------------------
 
