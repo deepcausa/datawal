@@ -28,9 +28,14 @@ tempdir); they are smoke targets, not stress targets. Plan for
 ## Setup
 
 ```sh
-cargo install cargo-fuzz
-rustup toolchain install nightly
+# Pinned to match CI. cargo-fuzz 0.13.1's published Cargo.lock fixes
+# `rustix 0.36.5`, which only compiles on nightlies up to mid-2024.
+cargo install cargo-fuzz --version 0.13.1 --locked
+rustup toolchain install nightly-2024-08-01
 ```
+
+Any compatible (cargo-fuzz, nightly) pair works locally; the pin above
+is the one CI uses.
 
 ## Build
 
