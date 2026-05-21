@@ -98,10 +98,79 @@ fn bench_scan(c: &mut Criterion) {
     group.finish();
 }
 
+/// Parity bench: collect every record from `scan_iter` into a `Vec`.
+///
+/// Expected to be in the same order of magnitude as `bench_scan`, with
+/// some `Result`-per-item overhead from the iterator contract.
+fn bench_scan_iter_collect(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_log_scan_iter_collect");
+
+    for &n in SCAN_COUNTS {
+        // Populate the log once per scenario, outside the measured loop.
+        let dir = bench_tempdir();
+        let mut log = RecordLog::open(dir.path()).expect("open");
+        let buf = payload(SCAN_PAYLOAD_SIZE);
+        for _ in 0..n {
+            log.append(&buf).expect("append");
+        }
+        log.fsync().expect("fsync");
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            // `scan_iter` takes `&self`; we can call it repeatedly on the
+            // same handle without re-opening.
+            b.iter(|| {
+                let records: Vec<_> = log
+                    .scan_iter()
+                    .expect("scan_iter")
+                    .collect::<anyhow::Result<Vec<_>>>()
+                    .expect("collect");
+                black_box(records);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Lazy-stop bench: open the iterator, decode one record, drop.
+///
+/// This is the value proposition of `scan_iter`: latency should not
+/// scale with log size when the consumer only needs the head.
+fn bench_scan_iter_early_stop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("record_log_scan_iter_early_stop");
+
+    for &n in SCAN_COUNTS {
+        // Populate the log once per scenario, outside the measured loop.
+        let dir = bench_tempdir();
+        let mut log = RecordLog::open(dir.path()).expect("open");
+        let buf = payload(SCAN_PAYLOAD_SIZE);
+        for _ in 0..n {
+            log.append(&buf).expect("append");
+        }
+        log.fsync().expect("fsync");
+
+        // The unit of work is "one record", not "n records": Elements(1).
+        group.throughput(Throughput::Elements(1));
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| {
+                let mut it = log.scan_iter().expect("scan_iter");
+                let first = it.next().expect("some").expect("ok");
+                black_box(first);
+                // `it` dropped here; nothing else decoded.
+            });
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_append_no_fsync,
     bench_append_fsync_each,
-    bench_scan
+    bench_scan,
+    bench_scan_iter_collect,
+    bench_scan_iter_early_stop
 );
 criterion_main!(benches);

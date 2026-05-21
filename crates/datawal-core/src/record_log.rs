@@ -250,6 +250,10 @@ impl RecordLog {
 
     /// Scan every segment in order and return every valid record.
     ///
+    /// Materialises every record into a `Vec<Record>`. For logs with many
+    /// records or large payloads, prefer [`RecordLog::scan_iter`] which
+    /// yields one record at a time without materialising the whole log.
+    ///
     /// Also refreshes `recovery_report()` and the internal `next_txid`.
     pub fn scan(&mut self) -> Result<Vec<Record>> {
         let ids = list_segment_ids(&self.dir)?;
@@ -257,6 +261,37 @@ impl RecordLog {
         self.next_txid = internal.last_txid_seen.checked_add(1).unwrap_or(1);
         self.last_report = Some(internal.clone().into_public());
         Ok(internal.records)
+    }
+
+    /// Returns an iterator over records.
+    ///
+    /// This is lazy at the record level: callers can pull one record at a
+    /// time without materialising the whole log into a `Vec<Record>`. It
+    /// is **not** a chunked or zero-copy scanner — v0.1 loads one segment
+    /// at a time into memory before yielding records from it. Peak memory
+    /// is therefore bounded by the size of the **largest segment**, not by
+    /// the total log size.
+    ///
+    /// Recovery semantics match [`RecordLog::scan`]:
+    ///
+    /// - A truncated or CRC-bad tail on the **last** segment is tolerated
+    ///   and ends iteration cleanly. The amount of trailing garbage
+    ///   discarded is reflected in
+    ///   [`RecordIter::recovery_report`].
+    /// - Any structural decode error, or any CRC/truncation problem in a
+    ///   sealed (non-last) segment, is yielded as an `Err` item; iteration
+    ///   ends after that error, and the underlying error is the same
+    ///   `anyhow` error that [`RecordLog::scan`] would have returned.
+    ///
+    /// This method takes `&self`. It does not refresh the log's own
+    /// `recovery_report()` or `next_txid` — only [`RecordLog::scan`] does
+    /// that.
+    ///
+    /// Aborting iteration early (by dropping the iterator before
+    /// exhaustion) is supported and has no on-disk side effects.
+    pub fn scan_iter(&self) -> Result<RecordIter<'_>> {
+        let ids = list_segment_ids(&self.dir)?;
+        Ok(RecordIter::new(&self.dir, ids))
     }
 
     /// Force durability of all records appended so far.
@@ -334,11 +369,17 @@ impl RecordLog {
     }
 }
 
-/// Internal scan record: same as `Record` but kept private to the module so
-/// future field changes don't break the public API.
+/// Internal scan state: accumulates records (for the eager `scan_all` path)
+/// or just counts them (for the streaming `RecordIter` path). Kept private
+/// so future field changes do not break the public API.
 #[derive(Debug, Clone)]
 struct ScanInternal {
+    /// Records collected eagerly. Empty in the streaming path.
     records: Vec<Record>,
+    /// Number of records replayed so far. Drives `RecoveryReport.records_replayed`.
+    /// In the eager path this equals `records.len()`; in the streaming
+    /// path `records` stays empty and only this counter advances.
+    records_replayed: u64,
     files_scanned: u32,
     last_txid_seen: u64,
     tail_truncated: u32,
@@ -356,7 +397,7 @@ impl ScanInternal {
     fn into_public(self) -> RecoveryReport {
         RecoveryReport {
             files_scanned: self.files_scanned,
-            records_replayed: self.records.len() as u64,
+            records_replayed: self.records_replayed,
             tail_truncated: self.tail_truncated,
             tail_bytes_discarded: self.tail_bytes_discarded,
             mid_stream_errors: 0,
@@ -403,6 +444,7 @@ fn scan_segment(dir: &Path, id: u32, is_last_segment: bool, out: &mut ScanIntern
                     offset,
                     len,
                 });
+                out.records_replayed += 1;
                 if txid > out.last_txid_seen {
                     out.last_txid_seen = txid;
                 }
@@ -465,6 +507,7 @@ fn scan_segment(dir: &Path, id: u32, is_last_segment: bool, out: &mut ScanIntern
 fn scan_all(dir: &Path, ids: &[u32]) -> Result<ScanInternal> {
     let mut out = ScanInternal {
         records: Vec::new(),
+        records_replayed: 0,
         files_scanned: 0,
         last_txid_seen: 0,
         tail_truncated: 0,
@@ -481,6 +524,235 @@ fn scan_all(dir: &Path, ids: &[u32]) -> Result<ScanInternal> {
         scan_segment(dir, *id, is_last, &mut out)?;
     }
     Ok(out)
+}
+
+/// Record-level lazy iterator over a [`RecordLog`].
+///
+/// Yielded by [`RecordLog::scan_iter`]. The iterator is lazy at the
+/// record level: each call to `next()` decodes one frame. It is **not**
+/// zero-copy and it is **not** chunked I/O — one whole segment file is
+/// resident in memory at a time. Peak memory is bounded by the largest
+/// segment, not by the total log size.
+///
+/// The list of segment ids is snapshotted when [`RecordLog::scan_iter`]
+/// is called; segments rotated in by the writer after that point are
+/// **not** observed by this iterator (this matches [`RecordLog::scan`]).
+///
+/// The borrow on `'log` only scopes the iterator to the lifetime of the
+/// [`RecordLog`]; the iterator does not hold the directory lock itself.
+pub struct RecordIter<'log> {
+    dir: PathBuf,
+    /// Snapshot of segment ids at the time `scan_iter` was called, sorted
+    /// ascending.
+    ids: Vec<u32>,
+    /// Index into `ids` of the segment currently being decoded.
+    cur_idx: usize,
+    /// Bytes of the current segment, fully loaded into memory.
+    cur_buf: Vec<u8>,
+    /// Logical decode cursor within `cur_buf`.
+    cur_offset: u64,
+    /// Id of the current segment (mirrors `ids[cur_idx]`, cached for
+    /// `Record::segment` without re-indexing).
+    cur_id: u32,
+    /// Whether the current segment has been loaded yet (cleared whenever
+    /// we advance to a new segment).
+    cur_loaded: bool,
+    /// Accumulated recovery state for [`RecordIter::report`].
+    report: ScanInternal,
+    /// Set to `true` once iteration has yielded `None` or a hard error.
+    /// Subsequent calls to `next()` always return `None`.
+    done: bool,
+    /// Borrow tag tying this iterator to its parent log.
+    _log: std::marker::PhantomData<&'log RecordLog>,
+}
+
+impl<'log> RecordIter<'log> {
+    fn new(dir: &Path, ids: Vec<u32>) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            ids,
+            cur_idx: 0,
+            cur_buf: Vec::new(),
+            cur_offset: 0,
+            cur_id: 0,
+            cur_loaded: false,
+            report: ScanInternal {
+                records: Vec::new(),
+                records_replayed: 0,
+                files_scanned: 0,
+                last_txid_seen: 0,
+                tail_truncated: 0,
+                tail_bytes_discarded: 0,
+                last_segment_logical_end: None,
+            },
+            done: false,
+            _log: std::marker::PhantomData,
+        }
+    }
+
+    /// Return the accumulated recovery report.
+    ///
+    /// The report is **complete only after the iterator has been fully
+    /// consumed** (i.e. once `next()` has returned `None`). While
+    /// iteration is in progress this returns a partial snapshot:
+    ///
+    /// - `records_replayed` counts only records the iterator has yielded
+    ///   successfully so far.
+    /// - `tail_truncated` and `tail_bytes_discarded` are populated only
+    ///   when the iterator has reached and finished processing the last
+    ///   segment.
+    /// - `files_scanned` increments as each segment is loaded; if
+    ///   iteration is dropped mid-segment, that segment is still counted.
+    pub fn recovery_report(&self) -> RecoveryReport {
+        self.report.clone().into_public()
+    }
+
+    /// Load `ids[cur_idx]` into `cur_buf` if not already loaded.
+    fn ensure_loaded(&mut self) -> Result<()> {
+        if self.cur_loaded {
+            return Ok(());
+        }
+        let id = self.ids[self.cur_idx];
+        let path = segment_path(&self.dir, id);
+        let mut f = File::open(&path)
+            .with_context(|| format!("datawal: open segment {}", path.display()))?;
+        self.cur_buf.clear();
+        f.read_to_end(&mut self.cur_buf)
+            .with_context(|| format!("datawal: read_to_end {}", path.display()))?;
+        self.cur_id = id;
+        self.cur_offset = 0;
+        self.cur_loaded = true;
+        self.report.files_scanned += 1;
+        Ok(())
+    }
+
+    /// Try to decode one more record from the current state. Returns:
+    /// - `Ok(Some(record))` — yielded a record, more may follow.
+    /// - `Ok(None)` — current segment is done; caller should advance.
+    /// - `Err(_)` — hard error; iterator must terminate.
+    fn try_next_in_segment(&mut self) -> Result<Option<Record>> {
+        let id = self.cur_id;
+        let is_last = self.cur_idx + 1 == self.ids.len();
+        let file_len = self.cur_buf.len() as u64;
+
+        if self.cur_offset == file_len {
+            self.report.last_segment_logical_end = Some((id, self.cur_offset));
+            return Ok(None);
+        }
+
+        match decode_next(&self.cur_buf, self.cur_offset) {
+            Ok(DecodeOutcome::Ok {
+                record_type,
+                txid,
+                key,
+                payload,
+                bytes_consumed,
+            }) => {
+                let len = bytes_consumed;
+                let offset = self.cur_offset;
+                self.cur_offset += bytes_consumed as u64;
+                if txid > self.report.last_txid_seen {
+                    self.report.last_txid_seen = txid;
+                }
+                // Track records_replayed by counting yielded records: we
+                // do not store them in `self.report.records` (that vector
+                // is only used by the eager `scan_all` path).
+                Ok(Some(Record {
+                    record_type,
+                    txid,
+                    key,
+                    payload,
+                    segment: id,
+                    offset,
+                    len,
+                }))
+            }
+            Ok(DecodeOutcome::Truncated { .. }) => {
+                if is_last {
+                    let discarded = file_len - self.cur_offset;
+                    self.report.tail_truncated += 1;
+                    self.report.tail_bytes_discarded += discarded;
+                    self.report.last_segment_logical_end = Some((id, self.cur_offset));
+                    Ok(None)
+                } else {
+                    let path = segment_path(&self.dir, id);
+                    Err(anyhow!(
+                        "datawal: truncated record at offset {} of non-tail segment {} ({}); refusing to silently drop data",
+                        self.cur_offset,
+                        id,
+                        path.display()
+                    ))
+                }
+            }
+            Ok(DecodeOutcome::CrcMismatch { bytes_consumed }) => {
+                if is_last {
+                    let discarded = file_len - self.cur_offset;
+                    self.report.tail_truncated += 1;
+                    self.report.tail_bytes_discarded += discarded;
+                    self.report.last_segment_logical_end = Some((id, self.cur_offset));
+                    let _ = bytes_consumed;
+                    Ok(None)
+                } else {
+                    let path = segment_path(&self.dir, id);
+                    Err(anyhow!(
+                        "datawal: CRC mismatch at offset {} of non-tail segment {} ({})",
+                        self.cur_offset,
+                        id,
+                        path.display()
+                    ))
+                }
+            }
+            Err(err) => {
+                let _: DecodeError = err;
+                let path = segment_path(&self.dir, id);
+                Err(anyhow!(
+                    "datawal: structural decode error at offset {} of segment {} ({}): {}",
+                    self.cur_offset,
+                    id,
+                    path.display(),
+                    err
+                ))
+            }
+        }
+    }
+}
+
+impl Iterator for RecordIter<'_> {
+    type Item = Result<Record>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            if self.cur_idx >= self.ids.len() {
+                self.done = true;
+                return None;
+            }
+            if let Err(e) = self.ensure_loaded() {
+                self.done = true;
+                return Some(Err(e));
+            }
+            match self.try_next_in_segment() {
+                Ok(Some(rec)) => {
+                    self.report.records_replayed += 1;
+                    return Some(Ok(rec));
+                }
+                Ok(None) => {
+                    // Current segment exhausted (cleanly, or tail-truncated
+                    // on the last segment). Advance to the next.
+                    self.cur_idx += 1;
+                    self.cur_loaded = false;
+                    self.cur_buf.clear();
+                    continue;
+                }
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(e));
+                }
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
