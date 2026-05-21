@@ -91,7 +91,7 @@ jobs:
         run: cargo publish --dry-run -p datawal
 
   formal:
-    name: formal (TLC on RecordLog / KeydirProjection / Compaction)
+    name: formal (TLC on RecordLog / KeydirProjection / Compaction / ReadWhileWrite)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,6 +142,14 @@ jobs:
             -workers 2 -config Compaction.cfg Compaction.tla | tee /tmp/Compaction.log
           grep -q "Model checking completed. No error has been found." /tmp/Compaction.log
 
+      - name: TLC ReadWhileWrite
+        run: |
+          set -euo pipefail
+          cd formal
+          java -XX:+UseParallelGC -cp "$GITHUB_WORKSPACE/tla2tools.jar" tlc2.TLC \
+            -workers 2 -config ReadWhileWrite.cfg ReadWhileWrite.tla | tee /tmp/ReadWhileWrite.log
+          grep -q "Model checking completed. No error has been found." /tmp/ReadWhileWrite.log
+
       - name: Upload TLC logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -151,6 +159,7 @@ jobs:
             /tmp/RecordLog.log
             /tmp/KeydirProjection.log
             /tmp/Compaction.log
+            /tmp/ReadWhileWrite.log
           if-no-files-found: ignore
 
   corpus:

@@ -695,7 +695,13 @@ pub struct RecordIter<'log> {
 }
 
 impl<'log> RecordIter<'log> {
-    fn new(dir: &Path, ids: Vec<u32>) -> Self {
+    /// Crate-internal constructor.
+    ///
+    /// Used by [`RecordLog::scan_iter`] and by
+    /// [`crate::RecordLogReader::scan_iter`]. The `'log` lifetime is whatever
+    /// borrow the caller is willing to tie the iterator to (the parent log
+    /// in one case, the reader handle in the other).
+    pub(crate) fn new(dir: &Path, ids: Vec<u32>) -> Self {
         Self {
             dir: dir.to_path_buf(),
             ids,

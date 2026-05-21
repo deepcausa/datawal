@@ -53,10 +53,32 @@ containing exactly one put per live key and no tombstones.
   - `NoDeletedKeyResurrection`
   - `ExportCleanCorrectness` — no tombstones, no duplicate keys.
 
+### `ReadWhileWrite.tla`
+
+Models concurrent reads against a live writer. A reader opens at an
+arbitrary point, snapshots the recoverable sequence (`durable \o
+buffered`) at open time, then yields records one at a time. The writer
+may continue to append and fsync while the reader is open.
+
+This model corresponds to the `RecordLogReader` public type
+(snapshot-at-open, no fs2 lock, separate from `RecordLog`). It does not
+re-model crash or multi-writer coordination — those are out of scope
+here and covered by `RecordLog.tla`.
+
+- **Variables:** `appended` (set), `buffered` / `durable` (sequences),
+  `appendCount`, `readerOpen`, `snapshot`, `yielded`.
+- **Actions:** `DoAppend(r)`, `DoFsync`, `DoOpenReader`, `DoReaderStep`,
+  `DoCloseReader`.
+- **Invariants:**
+  - `TypeInvariant`
+  - `SnapshotIsPrefixOfItself` — landmark for the lemma chain.
+  - `YieldedIsPrefix` — the reader never yields beyond its snapshot.
+  - `NoSpuriousYield` — every yielded record was previously appended.
+  - `ReaderBoundedByOpen` — `Len(yielded) <= Len(snapshot)`.
+  - `ClosedReaderHasNoState` — closing the reader clears its state.
+
 ## What is NOT modelled in this release
 
-- **`ReadWhileWrite.tla`** — concurrent scan and append. Deferred until a
-  reader API beyond `scan(&mut self)` exists.
 - Multi-writer coordination (datawal is single-writer per directory).
 - Filesystem-level details (real `fsync`, page cache).
 - CAS / blob store integration (deferred to v0.2).
@@ -77,6 +99,9 @@ java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
 
 java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
   -workers 2 -config Compaction.cfg Compaction.tla
+
+java -XX:+UseParallelGC -cp /path/to/tla2tools.jar tlc2.TLC \
+  -workers 2 -config ReadWhileWrite.cfg ReadWhileWrite.tla
 ```
 
 The default configs use very small constants (2 keys, 2 values, 4 ops)

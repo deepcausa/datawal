@@ -57,10 +57,12 @@ pub mod segment;
 
 mod datawal;
 mod record_log;
+mod record_log_reader;
 
 pub use datawal::{CompactionStats, DataWal};
 pub use format::{RecordType, MAX_KEY_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION};
 pub use record_log::{Record, RecordIter, RecordLog, RecordRef, RecoveryReport};
+pub use record_log_reader::RecordLogReader;
 
 /// Test-only helpers exposed to integration tests in this crate.
 ///
