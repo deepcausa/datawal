@@ -7,12 +7,12 @@
 datawal is a local record store: a framed append-only `RecordLog` plus an
 optional last-write-wins `DataWal` KV projection.
 
-> `0.1.4` is the first non-alpha datawal release. It is suitable for
-> local recoverable logs where JSONL would otherwise be used, with the
-> documented limits in [`docs/canon.md`](docs/canon.md). `0.1.x` may
-> still introduce small breaking changes before `0.2`; the on-disk
-> wire format (`WIRE_VERSION = 1`) is frozen and locked by corpus
-> fixtures.
+> datawal is a pre-1.0 crate suitable for local recoverable logs where
+> JSONL would otherwise be used, with the documented limits in
+> [`docs/canon.md`](docs/canon.md). It is not a general-purpose
+> database. `0.1.x` may still introduce small breaking changes before
+> `0.2`; the on-disk wire format (`WIRE_VERSION = 1`) is frozen and
+> locked by corpus fixtures.
 
 **MSRV:** Rust 1.75.0
 
@@ -61,22 +61,28 @@ optional last-write-wins `DataWal` KV projection.
 
 ## Current status
 
-**datawal is currently an alpha crate:** functional and model-checked at
-the protocol level, but not production-ready. See
+**datawal is a pre-1.0 crate suitable for local recoverable logs where
+JSONL would otherwise be used, with documented limits.** It is not a
+general-purpose database. `0.1.x` may still introduce small breaking
+changes before `0.2`; the on-disk wire format (`WIRE_VERSION = 1`) is
+frozen and locked by corpus fixtures. See
 [`docs/roadmap.md`](docs/roadmap.md) for the exact release scope.
-
-It is published on crates.io as an alpha release; the on-disk wire format
-is frozen by a corpus fixture set, but workload coverage is still only at
-the unit and integration level.
 
 What is in:
 
-- 58 tests green (`cargo test --workspace`).
-- 3 TLA+ models model-checked with TLC 2.19.
-- Wire-format corpus: 6 binary fixture directories, 11 corpus tests.
-- 4 runnable examples.
-- Real **CRC-32C** (Castagnoli, `0x1EDC6F41`) per record, pinned by a
-  known-vector test.
+- Framed `RecordLog` with **CRC-32C** (Castagnoli, `0x1EDC6F41`) and
+  longest-valid-prefix recovery.
+- `DataWal` bytes-in / bytes-out KV projection with tombstones and
+  `compact_to`.
+- `RecordLogReader` snapshot-at-open reader API (no live tailing).
+- `datawal` CLI for inspection and export
+  (`crates/datawal-cli/`).
+- Wire-format corpus locked by binary fixtures.
+- TLA+ models for `RecordLog`, `KeydirProjection`, `Compaction`,
+  and `ReadWhileWrite`.
+- Fuzz targets, `proptest` invariants, crash-injection tests,
+  ENOSPC tests, soak harness, and `dm-flakey` power-loss harness.
+- Criterion benchmarks with a reference run.
 - **fs2 fd-based advisory lock**: held by a file descriptor, not by the
   existence of the sentinel file. Released on `Drop` / process exit. A stale
   `.lock` from a crashed previous process is not a problem.
@@ -95,28 +101,28 @@ What is not in:
 - Multi-writer.
 - Query / secondary indexes.
 - In-place compaction.
-- Reader API / concurrent reads.
+- Group commit / configurable fsync policy.
 
 ## Limits
 
 `datawal` is bytes-first, but not unbounded. Neither the `RecordLog` nor
 the `DataWal` projection interprets the bytes — no JSON, no UTF-8, no
-MessagePack parsing in the core. Current alpha limits:
+MessagePack parsing in the core. Current limits:
 
-| Limit              | Value / status         | Notes                                                                                                |
-| ------------------ | ---------------------: | ---------------------------------------------------------------------------------------------------- |
-| Max key size       | 64 KiB                 | Per record. Larger keys are rejected.                                                                |
-| Max payload size   | 64 MiB                 | Per record. For larger values, use an external blob store and store references.                      |
-| Writers            | Single writer          | Enforced with an advisory fd lock. No multi-writer semantics.                                        |
-| Readers            | No reader API yet      | `scan()` is the only read path; tracked in [#5](https://github.com/deepcausa/datawal/issues/5).      |
-| `scan()` memory    | `Vec<Record>`          | Not streaming yet; large logs need [#3](https://github.com/deepcausa/datawal/issues/3).              |
-| `DataWal` keydir   | values in memory       | Live values are held in the in-memory keydir; offset-based variant is [#4](https://github.com/deepcausa/datawal/issues/4). |
-| Durability         | explicit `fsync()`     | `append()` is recoverable; `append() + fsync()` is durable under documented assumptions.             |
-| Compaction         | `compact_to` only      | Snapshot-style rebuild into a target directory. No in-place `compact()`.                             |
-| CAS / blob         | not included           | Planned as a separate crate / layer; tracked in [#7](https://github.com/deepcausa/datawal/issues/7). |
-| Compression        | not included           | `flags` must be zero in v0.1.                                                                        |
-| Query              | not included           | No SQL, indexes, joins, range scans, or planner. See [#13](https://github.com/deepcausa/datawal/issues/13). |
-| Production status  | alpha                  | Functional, tested, model-checked at the protocol level; not production-ready.                       |
+| Limit              | Value / status                | Notes                                                                                                                                  |
+| ------------------ | ----------------------------: | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Max key size       | 64 KiB                        | Per record. Larger keys are rejected.                                                                                                  |
+| Max payload size   | 64 MiB                        | Per record. For larger values, use an external blob store and store references.                                                        |
+| Writers            | Single writer                 | Enforced with an advisory fd lock. No multi-writer semantics.                                                                          |
+| Readers            | snapshot-at-open reader       | `RecordLogReader` can inspect a store without taking the writer lock; no live tailing API.                                             |
+| `scan()` memory    | eager `Vec<Record>`           | Use `scan_iter()` for record-level lazy iteration; it is segment-buffered, not zero-copy.                                              |
+| `DataWal` keydir   | offsets in memory             | Live keys map to `RecordRef`; `get()` performs I/O and CRC verification.                                                               |
+| Durability         | explicit `fsync()`            | `append()` is recoverable; `append() + fsync()` is durable under documented assumptions.                                               |
+| Compaction         | `compact_to` only             | Snapshot-style rebuild into a target directory. No in-place `compact()`.                                                               |
+| CAS / blob         | not included                  | Planned as a separate crate / layer; tracked in [#7](https://github.com/deepcausa/datawal/issues/7).                                   |
+| Compression        | not included                  | `flags` must be zero in v0.1.                                                                                                          |
+| Query              | not included                  | No SQL, indexes, joins, range scans, or planner. See [#13](https://github.com/deepcausa/datawal/issues/13).                            |
+| Production status  | scoped production use         | Suitable for local single-writer recoverable logs; not a general-purpose database.                                                     |
 
 What is **not** limited inside those bounds: the byte composition of
 keys and payloads. Any sequence is legal, including all-zero, all-`0xFF`,
@@ -159,18 +165,43 @@ db.export_jsonl(Path::new("/tmp/my-kv.jsonl"))?;
 
 The protocol has been validated at multiple levels:
 
-| Layer               | Evidence                                              |
-| ------------------- | ----------------------------------------------------- |
-| Specification       | `docs/canon.md` — 14 binding clauses; byte layout     |
-| Code                | `crates/datawal-core/src/` — ~1900 LOC Rust           |
-| Unit + integration  | 58 tests across `tests/*.rs` and embedded `#[test]`s  |
-| Wire-format corpus  | 6 binary fixture dirs, 11 corpus tests                |
-| Formal models       | 3 TLA+ models, model-checked with TLC 2.19            |
-| Runnable examples   | 4 examples under `crates/datawal-core/examples/`      |
+| Layer               | Evidence                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| Specification       | `docs/canon.md`; documented byte layout and limits                                             |
+| Wire format         | binary corpus fixtures locked by CI                                                            |
+| Formal models       | TLA+ models for `RecordLog`, `KeydirProjection`, `Compaction`, `ReadWhileWrite`                |
+| Parser robustness   | `cargo-fuzz` targets and `proptest` invariants                                                 |
+| Recovery behavior   | crash-injection tests, ENOSPC tests, `dm-flakey` power-loss harness                            |
+| Long-run behavior   | soak harness                                                                                   |
+| Performance         | Criterion benchmarks and reference run                                                         |
+| Operations          | `datawal` CLI for inspection and export                                                        |
 
 **Formal models wording:** model-checked under documented assumptions.
 Not "formally verified". Models do not check the Rust implementation.
 See `formal/README.md` for invariants and how to run TLC.
+
+## Durability evidence
+
+DataWal is exercised under several layers of failure-mode testing:
+
+- Fuzz tests on the record decoder (see [Fuzzing](#fuzzing)).
+- `proptest` invariants on append-then-recover sequences.
+- A SIGKILL-based crash-injection suite in `tests/crash_injection.rs`
+  that spawns the test binary as a child, kills it at named points
+  (`append_no_fsync`, `append_fsync`, `rotate`, `compact_to`,
+  `export_jsonl`), then reopens the store and checks invariants.
+- A `dm-flakey` power-loss simulation harness on Linux (root, not CI)
+  that routes ext4 over a device-mapper layer, flips the layer to
+  `error_writes`, force-unmounts, remounts the layer healthy, reopens
+  the store, and validates that the reopened state matches an
+  fsync-ordered oracle. See [`docs/power-loss-testing.md`](docs/power-loss-testing.md)
+  for the harness contract and prerequisites, and
+  [`docs/power-loss-results.md`](docs/power-loss-results.md) for a
+  sample verified run.
+
+This is stricter than process-level crash testing but is not a
+substitute for real power-cut testing on real hardware. DataWal trusts
+the storage stack below it to honor `fsync`.
 
 ## Layout
 
@@ -220,6 +251,7 @@ cargo test --workspace
 cargo run -p datawal --example record_log_demo
 cargo run -p datawal --example datawal_kv_demo
 cargo run -p datawal --example tail_recovery_demo
+cargo run -p datawal-cli -- --help
 cargo doc --workspace --no-deps
 ```
 
@@ -293,12 +325,14 @@ CI verifies the targets *compile* on nightly; it does not run them.
 
 ## Formal models
 
-Three small TLA+ models live under `formal/` and are checked with
+Four small TLA+ models live under `formal/` and are checked with
 [TLC](https://github.com/tlaplus/tlaplus/) 2.19+:
 
 - `RecordLog.tla` — append / fsync / crash; durable is a monotonic prefix.
 - `KeydirProjection.tla` — last-write-wins keydir from a put/del log.
 - `Compaction.tla` — `compact_to` preserves the live projection.
+- `ReadWhileWrite.tla` — snapshot-at-open reader behavior under
+  concurrent writer progress.
 
 **model-checked under documented assumptions** — not "formally verified",
 does not check the Rust implementation. See `formal/README.md`.
@@ -331,7 +365,7 @@ from them.
 
 - `docs/canon.md` — binding decisions and the byte-layout of a record.
 - `docs/technical-decisions.md` — TD-NNN entries documenting choices.
-- `docs/roadmap.md` — current alpha scope, what is frozen, and the tracked roadmap issues.
+- `docs/roadmap.md` — current release scope, what is frozen, and the tracked roadmap issues.
 - `formal/README.md` — the TLA+ models and how to run TLC.
 
 ## License

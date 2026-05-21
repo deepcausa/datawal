@@ -389,6 +389,12 @@ Hardening the Rust library for real workloads and publication:
   mutation.
 - Soak test: 24h append/rotate/fsync/reopen cycle.
 - Crash injection: kill during `append`, `rotate`, `compact_to`.
+- Power-loss simulation via Linux device-mapper (issue #31). v1 is a
+  `dm-flakey` harness that drops every write that has not reached the
+  device, then reopens and checks per-key prefix invariants against an
+  fsync-ordered oracle. v2 would add a `dm-log-writes`-based replay
+  harness that captures the I/O log and asserts every intermediate
+  state, not just the final one. Linux-only, root-only, never CI.
 - `fdatasync` / `fsync_policy` if a real workload demands it.
 - Streaming `scan` that does not allocate the full record list.
 - Keydir by offset (not by full value) to reduce memory pressure.
@@ -447,6 +453,7 @@ two disagree, the issues win — please open a PR against this section.
 | [#12](https://github.com/deepcausa/datawal/issues/12) WAL-engine features and related work     | scope       | open (notes)    | Reference list (incl. `okaywal`). Features adopted only when justified.          |
 | [#13](https://github.com/deepcausa/datawal/issues/13) Guardrails: datawal is JSONL, not a DB   | scope       | open (charter)  | Canonical scope statement; SQL / query / multi-writer / server remain non-goals. |
 | [#14](https://github.com/deepcausa/datawal/issues/14) Derived tag index for simple filtering   | exploratory | open (research) | Must remain a deterministic projection. No SQL drift, no general indexes.        |
+| [#31](https://github.com/deepcausa/datawal/issues/31) Power-loss simulation via Linux device-mapper | Track A | in progress  | v1: `dm-flakey` harness (this PR). v2: `dm-log-writes` replay. Linux-only, root-only, not CI. See `docs/power-loss-testing.md`. |
 
 Bodies on GitHub stay authoritative for acceptance criteria and open
 questions. This table only records track, status and the one-line cut.
