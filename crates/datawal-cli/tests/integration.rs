@@ -140,7 +140,7 @@ fn get_hit_returns_value_base64() {
         .stdout
         .clone();
 
-    let v: Value = serde_json::from_slice(out.trim_ascii_end()).unwrap();
+    let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["schema"], "datawal.cli.v1");
     assert_eq!(v["kind"], "value");
     assert_eq!(v["value_base64"], B64.encode(b"world"));
@@ -159,7 +159,7 @@ fn get_miss_exits_2() {
         .assert()
         .code(2);
     let out = assertion.get_output().stdout.clone();
-    let v: Value = serde_json::from_slice(out.trim_ascii_end()).unwrap();
+    let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["kind"], "miss");
 }
 
@@ -445,7 +445,7 @@ fn report_on_clean_log() {
         .get_output()
         .stdout
         .clone();
-    let v: Value = serde_json::from_slice(out.trim_ascii_end()).unwrap();
+    let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["schema"], "datawal.cli.v1");
     assert_eq!(v["kind"], "report");
     assert_eq!(v["files_scanned"], 1);
@@ -472,7 +472,7 @@ fn verify_clean_store_succeeds() {
         .get_output()
         .stdout
         .clone();
-    let v: Value = serde_json::from_slice(out.trim_ascii_end()).unwrap();
+    let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["kind"], "verify");
     assert_eq!(v["frames_checked"], 3);
     assert_eq!(v["crc_failures"], 0);
@@ -560,6 +560,6 @@ fn nonexistent_store_dir_creates_then_reports_empty() {
         .get_output()
         .stdout
         .clone();
-    let v: Value = serde_json::from_slice(out.trim_ascii_end()).unwrap();
+    let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["records_replayed"], 0);
 }
