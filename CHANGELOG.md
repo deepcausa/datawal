@@ -8,6 +8,25 @@ and the crate uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 `WIRE_VERSION = 1`, public Rust API additions and small breaking
 changes may still occur within `0.1.x` until `0.2.0`.
 
+## [Unreleased]
+
+### Added
+
+- **Power-loss simulation harness (Linux, device-mapper)** (issue
+  [#31](https://github.com/deepcausa/datawal/issues/31)). New
+  examples `power_loss_workload` and `power_loss_validate`, plus
+  driver scripts `scripts/power_loss_dm_flakey.sh` and
+  `scripts/power_loss_cleanup.sh`, exercise `DataWal` under
+  `dm-flakey`-induced write loss on ext4. The workload appends
+  `put`/`delete` ops with `fsync` after every op and mirrors them
+  into an fsync-ordered JSONL oracle on a separate filesystem.
+  After the dm table is flipped to `error_writes` and the volume is
+  force-unmounted and remounted, the validator reopens the store
+  and checks that the keydir is a per-key prefix of the oracle
+  (invariants 3, 4, 5). Public Rust API unchanged; wire format
+  unchanged. Linux-only, root-only, **not** part of CI. See
+  [`docs/power-loss-testing.md`](docs/power-loss-testing.md).
+
 ## [0.1.4] — 2026-05-21
 
 `0.1.4` is the first non-alpha release of `datawal`. It is suitable

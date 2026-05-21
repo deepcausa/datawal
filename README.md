@@ -172,6 +172,29 @@ The protocol has been validated at multiple levels:
 Not "formally verified". Models do not check the Rust implementation.
 See `formal/README.md` for invariants and how to run TLC.
 
+## Durability evidence
+
+DataWal is exercised under several layers of failure-mode testing:
+
+- Fuzz tests on the record decoder (see [Fuzzing](#fuzzing)).
+- `proptest` invariants on append-then-recover sequences.
+- A SIGKILL-based crash-injection suite in `tests/crash_injection.rs`
+  that spawns the test binary as a child, kills it at named points
+  (`append_no_fsync`, `append_fsync`, `rotate`, `compact_to`,
+  `export_jsonl`), then reopens the store and checks invariants.
+- A `dm-flakey` power-loss simulation harness on Linux (root, not CI)
+  that routes ext4 over a device-mapper layer, flips the layer to
+  `error_writes`, force-unmounts, remounts the layer healthy, reopens
+  the store, and validates that the reopened state matches an
+  fsync-ordered oracle. See [`docs/power-loss-testing.md`](docs/power-loss-testing.md)
+  for the harness contract and prerequisites, and
+  [`docs/power-loss-results.md`](docs/power-loss-results.md) for a
+  sample verified run.
+
+This is stricter than process-level crash testing but is not a
+substitute for real power-cut testing on real hardware. DataWal trusts
+the storage stack below it to honor `fsync`.
+
 ## Layout
 
 ```
