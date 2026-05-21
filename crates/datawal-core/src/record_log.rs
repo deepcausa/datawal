@@ -83,6 +83,32 @@ pub struct RecoveryReport {
 }
 
 /// Append-only framed record log.
+///
+/// # Failure model
+///
+/// Mutating operations (`append`, `append_record`, `fsync`, `rotate`) may
+/// fail in the middle of an I/O operation, after the kernel has accepted
+/// **part** of a frame but before the whole frame is on disk (`ENOSPC`,
+/// a broken disk, a torn write). When that happens the log handle enters
+/// a **poisoned** state:
+///
+/// - Every subsequent mutating call returns a deterministic error whose
+///   message starts with `datawal: writer poisoned:` and ends with
+///   `; drop handle and reopen`. The error is intentionally a plain
+///   `anyhow::Error` in 0.1.x; promotion to a typed error variant is
+///   tracked for a future minor release.
+/// - Read-only operations (`scan`, `scan_iter`, `recovery_report`,
+///   `active_segment`, `dir`) remain available so the caller can inspect
+///   state before dropping the handle.
+/// - The caller **must** drop the handle and re-open the directory with
+///   [`RecordLog::open`]. Reopen uses the standard longest-valid-prefix
+///   recovery (see invariant 2 in `AGENTS.md`) and will discard any
+///   partial tail bytes left behind by the failed write.
+///
+/// The crate intentionally does not try to truncate the partial tail or
+/// resync `active_size` on the live handle. Both are forms of mutating
+/// state after a write failure, which expands rather than contains the
+/// blast radius.
 #[derive(Debug)]
 pub struct RecordLog {
     dir: PathBuf,
@@ -97,6 +123,11 @@ pub struct RecordLog {
     next_txid: u64,
     /// Last scan report, lazily refreshed by `recovery_report()`.
     last_report: Option<RecoveryReport>,
+    /// Set on any mutating I/O failure (`append_record`, `fsync`,
+    /// `rotate`). Once set, subsequent mutating calls return a
+    /// deterministic error; read-only calls remain available. See the
+    /// type-level "Failure model" docs for the full contract.
+    poisoned: Option<&'static str>,
 }
 
 impl RecordLog {
@@ -170,7 +201,46 @@ impl RecordLog {
             active_size: active_size_logical,
             next_txid,
             last_report: Some(report.into_public()),
+            poisoned: None,
         })
+    }
+
+    /// Returns `true` if the writer is poisoned by a prior I/O failure.
+    ///
+    /// A poisoned log refuses all further mutating operations. Read-only
+    /// operations remain available so the caller can inspect state before
+    /// dropping the handle. See the type-level "Failure model" docs.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.is_some()
+    }
+
+    /// Internal: produce the stable poison error.
+    ///
+    /// The message format is part of the public contract documented on
+    /// `RecordLog` and is covered by tests; do not change it without
+    /// updating both the docs and `tests/poison_writer.rs`.
+    fn poison_error(reason: &'static str) -> anyhow::Error {
+        anyhow!(
+            "datawal: writer poisoned: {}; drop handle and reopen",
+            reason
+        )
+    }
+
+    /// Internal: if poisoned, return the stable poison error.
+    fn check_poisoned(&self) -> Result<()> {
+        if let Some(reason) = self.poisoned {
+            Err(Self::poison_error(reason))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Test-only: synthetically poison the writer. Reached from
+    /// integration tests via the `crate::testing` module. Not part
+    /// of the public API.
+    #[doc(hidden)]
+    pub fn __set_poisoned_for_test(&mut self, reason: &'static str) {
+        self.poisoned = Some(reason);
     }
 
     /// Directory backing this log.
@@ -221,25 +291,47 @@ impl RecordLog {
         key: &[u8],
         payload: &[u8],
     ) -> Result<RecordRef> {
+        self.check_poisoned()?;
+
         let txid = self.next_txid;
+        // Encoding errors (over-limit key/payload, txid overflow inside the
+        // encoder) happen before any I/O and therefore cannot leave a
+        // partial frame on disk. Do not poison the writer in that case.
         let bytes = encode_record(record_type, txid, key, payload)?;
         let len = bytes.len() as u32;
         let offset = self.active_size;
 
         // OpenOptions::append guarantees writes go to the end on POSIX.
-        self.active_file.write_all(&bytes).with_context(|| {
-            format!(
+        // A failure here may have written a prefix of `bytes` to the
+        // segment file. The longest-valid-prefix recovery on reopen will
+        // discard the partial tail, but the live handle's `active_size`
+        // and `next_txid` would now be out of sync with the file. Poison
+        // the writer so subsequent mutating calls fail loudly.
+        if let Err(e) = self.active_file.write_all(&bytes) {
+            self.poisoned = Some("append_record write_all failed");
+            return Err(anyhow::Error::new(e).context(format!(
                 "datawal: write_all to segment {}",
                 segment_path(&self.dir, self.active_id).display()
-            )
-        })?;
-        self.active_size = self
-            .active_size
-            .checked_add(len as u64)
-            .ok_or_else(|| anyhow!("datawal: active segment size overflow"))?;
-        self.next_txid = txid
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("datawal: txid overflow at {}", txid))?;
+            )));
+        }
+        // The two checked_add calls below cannot leave a partial frame on
+        // disk (the write already succeeded). They are integer-overflow
+        // guards. Treat overflow as poisoning anyway, because the live
+        // handle's offset bookkeeping is now meaningless.
+        self.active_size = match self.active_size.checked_add(len as u64) {
+            Some(v) => v,
+            None => {
+                self.poisoned = Some("active segment size overflow");
+                return Err(anyhow!("datawal: active segment size overflow"));
+            }
+        };
+        self.next_txid = match txid.checked_add(1) {
+            Some(v) => v,
+            None => {
+                self.poisoned = Some("txid overflow");
+                return Err(anyhow!("datawal: txid overflow at {}", txid));
+            }
+        };
 
         Ok(RecordRef {
             segment: self.active_id,
@@ -311,33 +403,54 @@ impl RecordLog {
     /// appends since the last fsync it is effectively a no-op at the
     /// kernel level, but it is always safe.
     pub fn fsync(&mut self) -> Result<()> {
-        self.active_file.sync_all().with_context(|| {
-            format!(
+        self.check_poisoned()?;
+
+        // `sync_all` can fail (`EIO`, journal flush refused, etc.). On
+        // Linux, fsync errors are not always re-reported on subsequent
+        // calls, so we treat any fsync failure as a fatal event for this
+        // handle. The on-disk state is whatever the kernel made of the
+        // dirty pages; the caller must drop + reopen and let
+        // longest-valid-prefix recovery settle it.
+        if let Err(e) = self.active_file.sync_all() {
+            self.poisoned = Some("fsync sync_all failed");
+            return Err(anyhow::Error::new(e).context(format!(
                 "datawal: sync_all on segment {}",
                 segment_path(&self.dir, self.active_id).display()
-            )
-        })?;
+            )));
+        }
         // Also fsync the directory so the directory entry of the active
         // segment (and any prior `rotate()` rename) is durable.
-        safeatomic_rs::fsync_dir(&self.dir)
-            .with_context(|| format!("datawal: fsync_dir {}", self.dir.display()))?;
+        if let Err(e) = safeatomic_rs::fsync_dir(&self.dir) {
+            self.poisoned = Some("fsync fsync_dir failed");
+            return Err(e.context(format!("datawal: fsync_dir {}", self.dir.display())));
+        }
         Ok(())
     }
 
     /// Rotate to the next segment. The current segment is closed and
     /// fsynced; the new segment is created empty and becomes active.
     pub fn rotate(&mut self) -> Result<()> {
-        // Make the current segment durable before moving on.
-        self.active_file.sync_all().with_context(|| {
-            format!(
+        self.check_poisoned()?;
+
+        // Make the current segment durable before moving on. A failure
+        // here means the previous segment's tail durability is in doubt,
+        // so we poison just like in `fsync`.
+        if let Err(e) = self.active_file.sync_all() {
+            self.poisoned = Some("rotate sync_all on previous segment failed");
+            return Err(anyhow::Error::new(e).context(format!(
                 "datawal: sync_all on rotate, segment {}",
                 segment_path(&self.dir, self.active_id).display()
-            )
-        })?;
+            )));
+        }
 
         let ids = list_segment_ids(&self.dir)?;
         let new_id = next_segment_id(&ids)?;
         if new_id <= self.active_id {
+            // Defensive: not reachable from a clean log because
+            // `next_segment_id` returns `max(ids) + 1` and `active_id`
+            // is in `ids`. Poison anyway because the on-disk segment
+            // sequence is now in an unexpected state.
+            self.poisoned = Some("rotate computed non-increasing segment id");
             bail!(
                 "datawal: rotate computed non-increasing segment id (current={}, computed={})",
                 self.active_id,
@@ -345,16 +458,31 @@ impl RecordLog {
             );
         }
         let new_path = segment_path(&self.dir, new_id);
-        File::create(&new_path)
-            .with_context(|| format!("datawal: create segment {}", new_path.display()))?;
-        safeatomic_rs::fsync_dir(&self.dir)
-            .with_context(|| format!("datawal: fsync_dir {}", self.dir.display()))?;
+        // A failure between creating the new segment file and opening it
+        // for append would leave a zero-byte segment on disk that the
+        // next reopen would treat as the active segment. That is the
+        // textbook poison case.
+        if let Err(e) = File::create(&new_path) {
+            self.poisoned = Some("rotate create new segment failed");
+            return Err(anyhow::Error::new(e)
+                .context(format!("datawal: create segment {}", new_path.display())));
+        }
+        if let Err(e) = safeatomic_rs::fsync_dir(&self.dir) {
+            self.poisoned = Some("rotate fsync_dir after segment create failed");
+            return Err(e.context(format!("datawal: fsync_dir {}", self.dir.display())));
+        }
 
-        self.active_file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .open(&new_path)
-            .with_context(|| format!("datawal: open new active segment {}", new_path.display()))?;
+        let new_file = match OpenOptions::new().read(true).append(true).open(&new_path) {
+            Ok(f) => f,
+            Err(e) => {
+                self.poisoned = Some("rotate open new active segment failed");
+                return Err(anyhow::Error::new(e).context(format!(
+                    "datawal: open new active segment {}",
+                    new_path.display()
+                )));
+            }
+        };
+        self.active_file = new_file;
         self.active_id = new_id;
         self.active_size = 0;
         Ok(())
