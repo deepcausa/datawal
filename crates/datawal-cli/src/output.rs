@@ -158,3 +158,83 @@ impl<'a> ValueMiss<'a> {
         }
     }
 }
+
+/// Result of the `export` subcommand: a JSONL file was written at
+/// `outfile`. Counts reflect the live KV projection visible at the
+/// moment `DataWal::open` ran.
+#[derive(Debug, Serialize)]
+pub struct ExportObj<'a> {
+    pub schema: &'a str,
+    pub kind: &'a str,
+    pub outfile: String,
+    pub records_written: u64,
+    pub bytes_written: u64,
+}
+
+impl<'a> ExportObj<'a> {
+    pub fn new(outfile: &std::path::Path, records_written: u64, bytes_written: u64) -> Self {
+        Self {
+            schema: SCHEMA,
+            kind: "export",
+            outfile: outfile.display().to_string(),
+            records_written,
+            bytes_written,
+        }
+    }
+}
+
+/// Result of the `compact` subcommand: a snapshot was written at
+/// `target`. Numeric fields mirror `datawal::CompactionStats`.
+#[derive(Debug, Serialize)]
+pub struct CompactObj<'a> {
+    pub schema: &'a str,
+    pub kind: &'a str,
+    pub target: String,
+    pub live_keys: u64,
+    pub records_written: u64,
+    pub bytes_written: u64,
+}
+
+impl<'a> CompactObj<'a> {
+    pub fn new(target: &std::path::Path, stats: &datawal::CompactionStats) -> Self {
+        Self {
+            schema: SCHEMA,
+            kind: "compact",
+            target: target.display().to_string(),
+            live_keys: stats.live_keys,
+            records_written: stats.records_written,
+            bytes_written: stats.bytes_written,
+        }
+    }
+}
+
+/// Result of the `check` subcommand: store-level health summary.
+///
+/// `keys_checked` is the number of live keys for which a `get`
+/// succeeded end-to-end (decode + CRC32C revalidation). The remaining
+/// fields are copied from `RecoveryReport` and tell the caller why
+/// the run may still have surfaced a non-zero exit code.
+#[derive(Debug, Serialize)]
+pub struct CheckObj<'a> {
+    pub schema: &'a str,
+    pub kind: &'a str,
+    pub keys_checked: u64,
+    pub tail_truncated: u32,
+    pub tail_bytes_discarded: u64,
+    pub mid_stream_errors: u32,
+    pub unsupported_versions: u32,
+}
+
+impl<'a> CheckObj<'a> {
+    pub fn new(keys_checked: u64, r: &RecoveryReport) -> Self {
+        Self {
+            schema: SCHEMA,
+            kind: "check",
+            keys_checked,
+            tail_truncated: r.tail_truncated,
+            tail_bytes_discarded: r.tail_bytes_discarded,
+            mid_stream_errors: r.mid_stream_errors,
+            unsupported_versions: r.unsupported_versions,
+        }
+    }
+}

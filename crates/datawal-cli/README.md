@@ -1,10 +1,16 @@
 # datawal-cli
 
-Read-only command-line inspector for [`datawal`](https://crates.io/crates/datawal)
-stores. Ships a single binary named `datawal` with five subcommands:
-`scan`, `get`, `report`, `verify`, `dump`.
+Command-line companion for [`datawal`](https://crates.io/crates/datawal)
+stores. Ships a single binary named `datawal` with eight subcommands
+in two groups:
 
-Mutating operations (`put` / `delete` / `rotate` / `compact`) are
+- **Inspection** (read-only): `scan`, `get`, `report`, `verify`,
+  `dump`, `check`. Never touch the source store.
+- **Source-untouched mutations**: `export`, `compact`. Produce a new
+  artefact at a caller-supplied output path; the source store on disk
+  is never modified.
+
+In-place mutating operations (`put` / `delete` / `rotate`) are
 intentionally **not** in this crate during the 0.1.x line. Use the
 library API for those, or a future `datawal-cli` release once the
 mutate surface is design-reviewed.
@@ -96,6 +102,48 @@ datawal --json dump ./my-store
 Header-only output (no payload bytes). Useful for inspecting wire
 layout on stores with large records.
 
+### `check` — DataWal-level health check
+
+```bash
+datawal check ./my-store
+datawal --json check ./my-store
+```
+
+Opens the store as a `DataWal`, calls `get` on every live key
+(forcing per-record CRC32C revalidation through the fd pool), then
+reads the `RecoveryReport`. Exits 3 on a per-record `get` failure
+(hard storage error), 2 on a truncated active-segment tail or
+mid-stream error, 0 otherwise. Complements `verify` (which walks
+*every* frame including overwritten/deleted ones) by reporting only
+on the bytes the live KV projection actually depends on.
+
+### `export` — write the live KV projection as JSONL
+
+```bash
+datawal export ./my-store ./export.jsonl
+datawal --json export ./my-store ./export.jsonl
+```
+
+Calls `DataWal::export_jsonl`, producing one JSON object per live
+key (base64-encoded payload). The source store on disk is never
+modified. Refuses to overwrite an existing `OUTFILE` (exit 1).
+Intended for inspection and external migration; there is no
+`import_jsonl`.
+
+### `compact` — snapshot-compact into a fresh target directory
+
+```bash
+datawal compact ./my-store ./compacted-store
+datawal --json compact ./my-store ./compacted-store
+```
+
+Calls `DataWal::compact_to`, which rebuilds a minimal log containing
+only live keys into `TARGET`. `TARGET` must either not exist or be
+an empty directory; the CLI refuses to write into a non-empty
+target (exit 1). The source store on disk is never modified; the
+caller decides when (and if) to swap the directories — the right
+swap policy is application-specific.
+
 ## Human vs JSON output
 
 The two output modes are deliberately different in shape and
@@ -133,6 +181,9 @@ with padding); field names use `snake_case`.
 | `report`   | `report`   | `files_scanned u32`, `records_replayed u64`, `tail_truncated u32`, `tail_bytes_discarded u64`, `mid_stream_errors u32`, `unsupported_versions u32`, `last_txid_seen u64` |
 | `verify`   | `verify`   | `frames_checked u64`, `crc_failures u64`, `tail_truncated u32`, `tail_bytes_discarded u64`, `last_segment u32`, `last_offset u64` |
 | `dump`     | `frame`    | `segment u32`, `offset u64`, `len u32`, `record_type str`, `txid u64`, `key_len usize`, `payload_len usize` |
+| `check`    | `check`    | `keys_checked u64`, `tail_truncated u32`, `tail_bytes_discarded u64`, `mid_stream_errors u32`, `unsupported_versions u32` |
+| `export`   | `export`   | `outfile str`, `records_written u64`, `bytes_written u64`                                            |
+| `compact`  | `compact`  | `target str`, `live_keys u64`, `records_written u64`, `bytes_written u64`                            |
 
 `record_type` is the string form: `Raw`, `Put`, or `Delete`.
 
@@ -145,9 +196,9 @@ new optional fields is non-breaking.
 | Code | Meaning                                                                  |
 |------|---------------------------------------------------------------------------|
 | 0    | Success.                                                                 |
-| 1    | User error (bad args, unparseable encoding), or store locked by another process. |
+| 1    | User error (bad args, unparseable encoding), store locked by another process, or refusal to clobber a non-empty `export` outfile / `compact` target. |
 | 2    | Recoverable storage state: truncated active-segment tail, or `get` miss. |
-| 3    | Hard storage error: CRC failure in a sealed segment, or decode error.    |
+| 3    | Hard storage error: CRC failure in a sealed segment, decode error, or per-record `get` failure during `check`. |
 
 ## Concurrency
 
@@ -162,8 +213,10 @@ invariant of `RecordLog`. As a consequence:
 
 ## What this binary is not
 
-- It does **not** mutate the store.
-- It does **not** compact or export.
+- It does **not** mutate the source store on disk. `export` and
+  `compact` only write to a caller-supplied output path.
+- It does **not** put, delete, or rotate. Those remain library-only
+  in 0.1.x.
 - It does **not** bypass the cooperative lock.
 - It is **not** a query / analytics engine. There is no `select`,
   `where`, `index`, or `server` subcommand, and these names are
