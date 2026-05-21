@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/datawal-core",
+    "crates/datawal-cli",
 ]
 # `fuzz/` is a separate crate using `cargo-fuzz` (libFuzzer + nightly).
 # It is intentionally outside the workspace so `cargo check --workspace`
