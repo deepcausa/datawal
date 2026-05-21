@@ -356,3 +356,260 @@ fn append_fsync_reopen() {
 // Helper: confirm File::open works (used to silence lint).
 #[allow(dead_code)]
 fn _unused(_: File) {}
+
+// ---------------------------------------------------------------------------
+// scan_iter parity tests
+//
+// These verify that `RecordLog::scan_iter` (the record-level lazy iterator,
+// segment-buffered) returns the same records and the same `RecoveryReport`
+// as the eager `RecordLog::scan` in every scenario the legacy tests above
+// already cover.
+//
+// Lazy-at-record-level only. Each segment is still bulk-loaded into memory
+// before any record from it is yielded; see the rustdoc on `scan_iter`.
+// ---------------------------------------------------------------------------
+
+// scan_iter_matches_scan
+//
+// Build a log with several records in a single segment; assert that
+// `scan()` and `scan_iter().collect()` return identical Vec<Record>.
+#[test]
+fn scan_iter_matches_scan() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = RecordLog::open(dir.path()).unwrap();
+        log.append(b"alpha").unwrap();
+        log.append(b"beta").unwrap();
+        log.append(b"gamma").unwrap();
+        log.fsync().unwrap();
+    }
+    let mut eager_log = RecordLog::open(dir.path()).unwrap();
+    let eager = eager_log.scan().unwrap();
+    drop(eager_log);
+
+    let lazy_log = RecordLog::open(dir.path()).unwrap();
+    let lazy: Vec<_> = lazy_log
+        .scan_iter()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(eager.len(), lazy.len(), "record counts differ");
+    for (a, b) in eager.iter().zip(lazy.iter()) {
+        assert_eq!(a.record_type, b.record_type);
+        assert_eq!(a.txid, b.txid);
+        assert_eq!(a.key, b.key);
+        assert_eq!(a.payload, b.payload);
+        assert_eq!(a.segment, b.segment);
+        assert_eq!(a.offset, b.offset);
+        assert_eq!(a.len, b.len);
+    }
+}
+
+// scan_iter_preserves_order_across_segments
+//
+// With a rotation between writes, both `scan` and `scan_iter` yield
+// records in segment-then-offset order.
+#[test]
+fn scan_iter_preserves_order_across_segments() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = RecordLog::open(dir.path()).unwrap();
+        log.append(b"a1").unwrap();
+        log.append(b"a2").unwrap();
+        log.fsync().unwrap();
+        log.rotate().unwrap();
+        log.append(b"b1").unwrap();
+        log.append(b"b2").unwrap();
+        log.fsync().unwrap();
+    }
+
+    let mut eager_log = RecordLog::open(dir.path()).unwrap();
+    let eager = eager_log.scan().unwrap();
+    drop(eager_log);
+
+    let lazy_log = RecordLog::open(dir.path()).unwrap();
+    let lazy: Vec<_> = lazy_log
+        .scan_iter()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    let eager_payloads: Vec<&[u8]> = eager.iter().map(|r| r.payload.as_slice()).collect();
+    let lazy_payloads: Vec<&[u8]> = lazy.iter().map(|r| r.payload.as_slice()).collect();
+    assert_eq!(
+        eager_payloads,
+        vec![&b"a1"[..], &b"a2"[..], &b"b1"[..], &b"b2"[..]]
+    );
+    assert_eq!(eager_payloads, lazy_payloads);
+
+    let eager_segments: Vec<u32> = eager.iter().map(|r| r.segment).collect();
+    let lazy_segments: Vec<u32> = lazy.iter().map(|r| r.segment).collect();
+    assert_eq!(eager_segments, vec![1, 1, 2, 2]);
+    assert_eq!(eager_segments, lazy_segments);
+}
+
+// scan_iter_tail_truncation_matches_scan
+//
+// Truncate the active segment mid-record. Both eager and lazy paths must
+// recover the same valid prefix and surface the same `RecoveryReport`.
+#[test]
+fn scan_iter_tail_truncation_matches_scan() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = RecordLog::open(dir.path()).unwrap();
+        log.append(b"r1").unwrap();
+        log.append(b"r2").unwrap();
+        log.append(b"r3").unwrap();
+        log.fsync().unwrap();
+    }
+
+    // Truncate inside r3's payload: keep r1+r2 + r3's header + 1 byte.
+    // We don't need exact byte arithmetic because the spec is "longest
+    // valid prefix"; cutting at total_len - 5 is enough to invalidate r3.
+    let path = dir.path().join("00000001.dwal");
+    let f = OpenOptions::new().write(true).open(&path).unwrap();
+    let total = f.metadata().unwrap().len();
+    assert!(total > 5, "log should have grown past 5 bytes");
+    f.set_len(total - 5).unwrap();
+    drop(f);
+
+    // Eager path.
+    let mut eager_log = RecordLog::open(dir.path()).unwrap();
+    let eager = eager_log.scan().unwrap();
+    let eager_report = eager_log.recovery_report().unwrap();
+    drop(eager_log);
+
+    // Lazy path.
+    let lazy_log = RecordLog::open(dir.path()).unwrap();
+    let mut lazy_iter = lazy_log.scan_iter().unwrap();
+    let mut lazy: Vec<_> = Vec::new();
+    for item in &mut lazy_iter {
+        lazy.push(item.unwrap());
+    }
+    let lazy_report = lazy_iter.recovery_report();
+
+    assert_eq!(eager.len(), 2);
+    assert_eq!(lazy.len(), 2);
+    let eager_payloads: Vec<&[u8]> = eager.iter().map(|r| r.payload.as_slice()).collect();
+    let lazy_payloads: Vec<&[u8]> = lazy.iter().map(|r| r.payload.as_slice()).collect();
+    assert_eq!(eager_payloads, vec![&b"r1"[..], &b"r2"[..]]);
+    assert_eq!(eager_payloads, lazy_payloads);
+
+    assert_eq!(eager_report.records_replayed, 2);
+    assert_eq!(eager_report.tail_truncated, 1);
+    assert!(eager_report.tail_bytes_discarded > 0);
+    assert_eq!(lazy_report.records_replayed, eager_report.records_replayed);
+    assert_eq!(lazy_report.tail_truncated, eager_report.tail_truncated);
+    assert_eq!(
+        lazy_report.tail_bytes_discarded,
+        eager_report.tail_bytes_discarded
+    );
+    assert_eq!(lazy_report.last_txid_seen, eager_report.last_txid_seen);
+}
+
+// scan_iter_closed_segment_crc_error_matches_scan
+//
+// Corrupt one byte inside a sealed (non-active) segment. Both eager and
+// lazy paths must surface a hard error. We exercise both paths in this
+// test: the eager `RecordLog::open` already calls scan, so we corrupt
+// AFTER opening, while the writer is still holding the lock, then call
+// `scan_iter()` directly and verify it yields `Err` on the corrupt
+// segment.
+#[test]
+fn scan_iter_closed_segment_crc_error_matches_scan() {
+    let dir = tempdir().unwrap();
+    let mut log = RecordLog::open(dir.path()).unwrap();
+    log.append(b"seg1-a").unwrap();
+    log.append(b"seg1-b").unwrap();
+    log.fsync().unwrap();
+    log.rotate().unwrap();
+    log.append(b"seg2-a").unwrap();
+    log.fsync().unwrap();
+
+    // Corrupt one byte inside seg1's payload. The fs2 lock is exclusive
+    // for `RecordLog::open` only; raw OpenOptions on the underlying file
+    // is allowed within the same process.
+    let path = dir.path().join("00000001.dwal");
+    let mut f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    // Flip a byte deep into the file (any byte inside record bytes).
+    f.seek(SeekFrom::Start((HEADER_LEN as u64) + 2)).unwrap();
+    f.write_all(&[0xFF]).unwrap();
+    drop(f);
+
+    // Lazy path: iterator should produce an Err when it reaches seg1.
+    let mut lazy_iter = log.scan_iter().unwrap();
+    let mut saw_err = false;
+    for item in &mut lazy_iter {
+        if item.is_err() {
+            saw_err = true;
+            break;
+        }
+    }
+    assert!(saw_err, "lazy iter should report CRC error in sealed seg1");
+
+    drop(log);
+
+    // Eager path on reopen: scan-during-open must fail loudly.
+    let result = RecordLog::open(dir.path());
+    assert!(
+        result.is_err(),
+        "eager reopen should fail on sealed CRC mismatch"
+    );
+}
+
+// scan_iter_can_stop_early
+//
+// Dropping the iterator mid-stream must be safe: no panic, no side
+// effect on disk. A subsequent `scan_iter` or `scan` returns the full
+// log.
+#[test]
+fn scan_iter_can_stop_early() {
+    let dir = tempdir().unwrap();
+    {
+        let mut log = RecordLog::open(dir.path()).unwrap();
+        for i in 0..5 {
+            let payload = format!("rec-{i}");
+            log.append(payload.as_bytes()).unwrap();
+        }
+        log.fsync().unwrap();
+    }
+
+    let log = RecordLog::open(dir.path()).unwrap();
+    let mut iter = log.scan_iter().unwrap();
+    let first = iter.next().unwrap().unwrap();
+    let second = iter.next().unwrap().unwrap();
+    assert_eq!(first.payload, b"rec-0");
+    assert_eq!(second.payload, b"rec-1");
+
+    // Mid-iter snapshot of recovery_report: at least 2 records have
+    // been yielded already.
+    let partial = iter.recovery_report();
+    assert!(
+        partial.records_replayed >= 2,
+        "expected >=2 records_replayed mid-iter, got {}",
+        partial.records_replayed
+    );
+
+    drop(iter);
+    drop(log);
+
+    // Reopen and run a full eager scan: must see all 5 records.
+    let mut log2 = RecordLog::open(dir.path()).unwrap();
+    let all = log2.scan().unwrap();
+    let payloads: Vec<&[u8]> = all.iter().map(|r| r.payload.as_slice()).collect();
+    assert_eq!(
+        payloads,
+        vec![
+            &b"rec-0"[..],
+            &b"rec-1"[..],
+            &b"rec-2"[..],
+            &b"rec-3"[..],
+            &b"rec-4"[..]
+        ]
+    );
+}

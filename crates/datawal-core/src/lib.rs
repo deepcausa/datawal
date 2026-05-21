@@ -60,4 +60,4 @@ mod record_log;
 
 pub use datawal::{CompactionStats, DataWal};
 pub use format::{RecordType, MAX_KEY_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION};
-pub use record_log::{Record, RecordLog, RecordRef, RecoveryReport};
+pub use record_log::{Record, RecordIter, RecordLog, RecordRef, RecoveryReport};
