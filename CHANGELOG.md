@@ -8,7 +8,12 @@ and the crate uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 `WIRE_VERSION = 1`, public Rust API additions and small breaking
 changes may still occur within `0.1.x` until `0.2.0`.
 
-## [Unreleased]
+## [0.1.5] — 2026-05-21
+
+`0.1.5` is a docs-and-testing release. It adds a Linux device-mapper
+power-loss simulation harness and brings the README in line with the
+post-alpha state of the crate. Public Rust API unchanged; wire
+format (`WIRE_VERSION = 1`) unchanged; corpus fixtures unchanged.
 
 ### Added
 
@@ -23,9 +28,26 @@ changes may still occur within `0.1.x` until `0.2.0`.
   After the dm table is flipped to `error_writes` and the volume is
   force-unmounted and remounted, the validator reopens the store
   and checks that the keydir is a per-key prefix of the oracle
-  (invariants 3, 4, 5). Public Rust API unchanged; wire format
-  unchanged. Linux-only, root-only, **not** part of CI. See
-  [`docs/power-loss-testing.md`](docs/power-loss-testing.md).
+  (invariants 3, 4, 5). Linux-only, root-only, **not** part of CI.
+  See [`docs/power-loss-testing.md`](docs/power-loss-testing.md) for
+  the harness contract and
+  [`docs/power-loss-results.md`](docs/power-loss-results.md) for a
+  sanitized record of a verified run.
+- **`Durability evidence` section in `README.md`** linking the fuzz
+  targets, `proptest` invariants, SIGKILL crash-injection suite, and
+  the new `dm-flakey` harness.
+
+### Changed
+
+- **`README.md` aligned to post-alpha state.** Removed references to
+  "alpha crate", "alpha release", "alpha limits", "not
+  production-ready", and other wording inherited from
+  `0.1.0-alpha.1`. Updated "What is in" / "Limits" / "Evidence
+  stack" / "Formal models" to reflect `RecordLogReader`,
+  `scan_iter`, the `datawal` CLI, and the four TLA+ models
+  (`RecordLog`, `KeydirProjection`, `Compaction`, `ReadWhileWrite`).
+  Reframed status as "pre-1.0 crate suitable for local recoverable
+  logs with documented limits; not a general-purpose database".
 
 ## [0.1.4] — 2026-05-21
 
