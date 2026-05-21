@@ -151,7 +151,21 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
         .context("base64 decode oracle field")
 }
 
-fn load_oracle(path: &Path) -> Result<(HashMap<Vec<u8>, OracleEffect>, u64, u64, u64)> {
+/// Oracle aggregate: final effect per key, plus counters for reporting.
+///
+/// Fields:
+/// - `effect`        : last write seen per key (`Live(payload)` or `Dead`).
+/// - `last_seq`      : highest sequence number observed.
+/// - `puts`          : count of `put` lines parsed.
+/// - `dels`          : count of `del` lines parsed.
+struct OracleAggregate {
+    effect: HashMap<Vec<u8>, OracleEffect>,
+    last_seq: u64,
+    puts: u64,
+    dels: u64,
+}
+
+fn load_oracle(path: &Path) -> Result<OracleAggregate> {
     let f = fs::File::open(path).with_context(|| format!("open oracle {}", path.display()))?;
     let mut effect: HashMap<Vec<u8>, OracleEffect> = HashMap::new();
     let mut last_seq: u64 = 0;
@@ -180,7 +194,12 @@ fn load_oracle(path: &Path) -> Result<(HashMap<Vec<u8>, OracleEffect>, u64, u64,
             }
         }
     }
-    Ok((effect, last_seq, puts, dels))
+    Ok(OracleAggregate {
+        effect,
+        last_seq,
+        puts,
+        dels,
+    })
 }
 
 fn main() -> ExitCode {
@@ -201,7 +220,12 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let (effect, last_seq, oracle_puts, oracle_dels) = load_oracle(&cli.oracle)?;
+    let OracleAggregate {
+        effect,
+        last_seq,
+        puts: oracle_puts,
+        dels: oracle_dels,
+    } = load_oracle(&cli.oracle)?;
     eprintln!(
         "power_loss_validate: oracle loaded path={} last_seq={} puts={} dels={} effective_keys={}",
         cli.oracle.display(),

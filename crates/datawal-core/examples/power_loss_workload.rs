@@ -281,6 +281,11 @@ fn main() -> ExitCode {
     }
 }
 
+// `FSYNC_BATCH` is a knob for future tuning; today it is fixed at 1 so
+// every op is `fsync`'d before the oracle line is appended. clippy's
+// `modulo_one` is correct at this value but the structure is intentional
+// (the modulo guard stays meaningful if the constant is ever raised).
+#[allow(clippy::modulo_one)]
 fn run(cli: Cli) -> Result<()> {
     fs::create_dir_all(&cli.work_dir)
         .with_context(|| format!("create work dir {}", cli.work_dir.display()))?;
