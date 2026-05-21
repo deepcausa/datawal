@@ -97,7 +97,7 @@ fn open_rebuilds_keydir_from_log() {
         kv.delete(b"b").unwrap();
         kv.fsync().unwrap();
     }
-    let kv = DataWal::open(dir.path()).unwrap();
+    let mut kv = DataWal::open(dir.path()).unwrap();
     assert_eq!(kv.len(), 1);
     assert_eq!(kv.get(b"a").unwrap().as_deref(), Some(&b"3"[..]));
     assert_eq!(kv.get(b"b").unwrap(), None);
@@ -125,7 +125,7 @@ fn compact_to_preserves_live_state() {
     assert_eq!(stats.records_written, 3);
     assert!(stats.bytes_written > 0);
 
-    let kv2 = DataWal::open(&dst_path).unwrap();
+    let mut kv2 = DataWal::open(&dst_path).unwrap();
     assert_eq!(kv2.len(), 3);
     assert_eq!(kv2.get(b"a").unwrap().as_deref(), Some(&b"3"[..]));
     assert_eq!(kv2.get(b"b").unwrap().as_deref(), Some(&b"2"[..]));

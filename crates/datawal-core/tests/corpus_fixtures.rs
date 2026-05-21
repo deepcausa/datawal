@@ -167,7 +167,7 @@ fn unknown_version_is_hard_error() {
 #[test]
 fn delete_tombstone_projects_to_lww_keydir() {
     let (_tmp, dir) = copy_fixture("delete_tombstone");
-    let kv = DataWal::open(&dir).expect("open");
+    let mut kv = DataWal::open(&dir).expect("open");
     // Source wrote: put alpha=1, put beta=2, put alpha=3, del beta.
     assert_eq!(kv.len(), 1);
     assert_eq!(kv.get(b"alpha").expect("get"), Some(b"3".to_vec()));
@@ -200,7 +200,7 @@ fn delete_tombstone_underlying_log_replays_all_records() {
 #[test]
 fn compact_to_output_contains_only_live_keys_as_puts() {
     let (_tmp, dir) = copy_fixture("compact_to_output");
-    let kv = DataWal::open(&dir).expect("open");
+    let mut kv = DataWal::open(&dir).expect("open");
     assert_eq!(kv.len(), 2);
     assert_eq!(kv.get(b"keep").expect("keep"), Some(b"final".to_vec()));
     assert_eq!(kv.get(b"other").expect("other"), Some(b"value".to_vec()));

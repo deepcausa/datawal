@@ -57,7 +57,7 @@ fn main() -> Result<()> {
     );
 
     // Reopen the compacted directory and verify state.
-    let kv2 = DataWal::open(&compact_dir)?;
+    let mut kv2 = DataWal::open(&compact_dir)?;
     println!("after compact reopen: len={}", kv2.len());
     println!("  a = {:?}", kv2.get(b"a")?);
     println!("  b contains_key = {}", kv2.contains_key(b"b"));

@@ -126,7 +126,7 @@ fn cmd_get(args: GetArgs, json: bool) -> Result<ExitCode> {
     let mode: BytesMode = args.bytes.into();
     let truncate = truncate_for(args.no_truncate);
 
-    let store = DataWal::open(&args.store)
+    let mut store = DataWal::open(&args.store)
         .with_context(|| format!("open store {}", args.store.display()))?;
     match store.get(&key)? {
         Some(value) => {
