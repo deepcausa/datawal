@@ -18,6 +18,13 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 fn bin() -> Command {
+    // `CommandCargoExt::cargo_bin` is deprecated as of assert_cmd 2.1.0 in favour of
+    // a `cargo::cargo_bin!` macro that was added later in the 2.2.x series. That series
+    // requires Cargo edition2024 (rust 1.85), which is incompatible with the workspace's
+    // MSRV of 1.75 (see `dev/0.1.4-plan.md`). Pinning to 2.1.2 in `Cargo.lock` keeps the
+    // function callable; the explicit allow silences the warning under stable clippy
+    // without polluting the MSRV job.
+    #[allow(deprecated)]
     Command::cargo_bin("datawal").expect("datawal binary present")
 }
 
