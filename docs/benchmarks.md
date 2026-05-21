@@ -7,7 +7,7 @@ via `cargo bench` or `just bench`.
 
 For a single example reference run (numbers from one machine, one date,
 generic stack description), see
-[`benchmarks/v0.1.0-alpha-reference.md`](benchmarks/v0.1.0-alpha-reference.md).
+[`benchmarks/v0.1.4-reference.md`](benchmarks/v0.1.4-reference.md).
 
 ## What is measured
 
@@ -196,7 +196,7 @@ By design, the benches do not cover:
 - Benches are permanent in the repository.
 - Numbers from any single run are not committed as truth.
 - A reference run with generic stack description is checked in at
-  [`benchmarks/v0.1.0-alpha-reference.md`](benchmarks/v0.1.0-alpha-reference.md)
+  [`benchmarks/v0.1.4-reference.md`](benchmarks/v0.1.4-reference.md)
   for *order-of-magnitude orientation only*.
 - CI verifies that benches compile (`cargo bench --workspace --no-run`).
   CI does not run real benches; the numbers would be nonsense on

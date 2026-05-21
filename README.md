@@ -261,7 +261,7 @@ For methodology, how to read Criterion output, gotchas (especially around
 fsync), and what is *not* measured, see [`docs/benchmarks.md`](docs/benchmarks.md).
 
 For an order-of-magnitude reference run with generic stack description, see
-[`docs/benchmarks/v0.1.0-alpha-reference.md`](docs/benchmarks/v0.1.0-alpha-reference.md).
+[`docs/benchmarks/v0.1.4-reference.md`](docs/benchmarks/v0.1.4-reference.md).
 
 **fsync benches need a real local disk.** On Linux, `/tmp` is often tmpfs and
 overlayfs / NFS likewise lie about durability — fsync numbers from those
