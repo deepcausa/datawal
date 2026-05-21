@@ -61,3 +61,24 @@ mod record_log;
 pub use datawal::{CompactionStats, DataWal};
 pub use format::{RecordType, MAX_KEY_LEN, MAX_PAYLOAD_LEN, WIRE_VERSION};
 pub use record_log::{Record, RecordIter, RecordLog, RecordRef, RecoveryReport};
+
+/// Test-only helpers exposed to integration tests in this crate.
+///
+/// **Not** part of the public API. The module is `#[doc(hidden)]` and
+/// its name is intentionally awkward. Anything in here is allowed to
+/// change without a semver bump. External users must not depend on it.
+#[doc(hidden)]
+pub mod testing {
+    /// Synthetically place a [`RecordLog`](crate::RecordLog) into the
+    /// poisoned state without performing a real I/O failure.
+    ///
+    /// This exists so the *contract* of poisoning (stable error
+    /// message, read-only ops still available, reopen recovers) can
+    /// be tested deterministically on every platform without needing
+    /// a way to force `ENOSPC` / `EIO` on the live handle.
+    ///
+    /// Real I/O-driven poisoning is exercised in `tests/disk_full.rs`.
+    pub fn poison_record_log_for_test(log: &mut crate::RecordLog, reason: &'static str) {
+        log.__set_poisoned_for_test(reason);
+    }
+}

@@ -29,3 +29,11 @@ base64 = "0.22"
 safeatomic-rs = "0.1"
 tempfile = "3"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# `proptest` is dev-only. The caret `^1.5` would let `cargo update` pick
+# `1.9+` (rust-version 1.82) or `1.10+` (1.84) or `1.11+` (1.85), all of
+# which break the MSRV 1.75 CI job. `Cargo.lock` is pinned to `proptest
+# 1.8.0` (rust-version 1.74) — the highest line that still parses on
+# Cargo 1.75. Same pattern as the `getrandom` lock-pin documented in
+# `AGENTS.md` § "Toolchain pinning". If you ever run `cargo update -p
+# proptest` without `--precise`, you will reintroduce the failure.
+proptest = { version = "1.5", default-features = false, features = ["std"] }
