@@ -192,11 +192,13 @@ fn fd_pool_reuses_fd_across_repeated_gets() {
     {
         let after = std::fs::read_dir("/proc/self/fd").map(|d| d.count()).ok();
         if let (Some(b), Some(a)) = (before, after) {
-            // The pool has a small fixed capacity. After 500 gets across
-            // the same segment, the fd count should not grow by more than
-            // the pool capacity (a few units of slack for harness fds).
+            // The pool has a small fixed capacity (DEFAULT_CAPACITY = 16).
+            // After 500 gets across the same segment, the fd count should
+            // not grow by more than the pool capacity plus slack for
+            // harness/runner-dependent fds (CI runners can hold several
+            // extra fds open compared to local containers).
             assert!(
-                a <= b + 4,
+                a <= b + 32,
                 "fd count grew from {b} to {a} -- fd pool not reusing"
             );
         }
