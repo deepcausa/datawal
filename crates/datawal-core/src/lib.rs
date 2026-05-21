@@ -56,6 +56,7 @@ pub mod lock;
 pub mod segment;
 
 mod datawal;
+mod fd_pool;
 mod record_log;
 mod record_log_reader;
 

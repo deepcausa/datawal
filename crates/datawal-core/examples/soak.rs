@@ -452,7 +452,7 @@ fn run(cli: Cli) -> Result<()> {
     drop(log);
 
     // Final-state consistency: reopen and compare keydir to `expected`.
-    let reopen = DataWal::open(&cli.work_dir).context("final reopen")?;
+    let mut reopen = DataWal::open(&cli.work_dir).context("final reopen")?;
     let observed_keys: std::collections::HashSet<Vec<u8>> = reopen.keys().into_iter().collect();
     let expected_keys: std::collections::HashSet<Vec<u8>> = expected.keys().cloned().collect();
 

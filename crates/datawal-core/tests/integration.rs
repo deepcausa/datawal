@@ -52,7 +52,7 @@ fn datawal_reopen_after_put_delete() {
         kv.put(b"k01", b"v1-bis").unwrap();
         kv.fsync().unwrap();
     }
-    let kv = DataWal::open(dir.path()).unwrap();
+    let mut kv = DataWal::open(dir.path()).unwrap();
     assert_eq!(kv.len(), 10, "10 odd keys should survive");
     for i in (0..20u32).step_by(2) {
         let key = format!("k{i:02}");

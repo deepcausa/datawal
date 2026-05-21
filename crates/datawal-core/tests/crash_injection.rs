@@ -233,7 +233,7 @@ fn child_compact_to(dir: &Path) -> ! {
         // Each iteration: open, compact, drop, remove. Open takes a
         // fresh fs2 lock; SIGKILL during the loop releases the lock
         // automatically.
-        let kv = DataWal::open(&source).expect("child: open source");
+        let mut kv = DataWal::open(&source).expect("child: open source");
         kv.compact_to(&out_dir).expect("child: compact_to");
         drop(kv);
         let _ = writeln!(stdout, "compacted {i}");
@@ -259,7 +259,7 @@ fn child_export_jsonl(dir: &Path) -> ! {
     let mut stdout = std::io::stdout().lock();
     for i in 0..MAX_RECORDS {
         let out = dir.join(format!("export_{i}.jsonl"));
-        let kv = DataWal::open(&source).expect("child: open source");
+        let mut kv = DataWal::open(&source).expect("child: open source");
         kv.export_jsonl(&out).expect("child: export_jsonl");
         drop(kv);
         let _ = writeln!(stdout, "exported {i}");
@@ -627,7 +627,7 @@ fn crash_compact_to() {
         // that segment_digest might miss (e.g. a lock-file artefact
         // we don't account for would be caught by the digest, but
         // we also want to verify the projection is correct).
-        let kv = DataWal::open(&source).expect("parent: reopen source");
+        let mut kv = DataWal::open(&source).expect("parent: reopen source");
         let mut actual: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
         for k in expected.keys() {
             let v = kv
@@ -720,7 +720,7 @@ fn crash_export_jsonl() {
 
         // Invariant 2: source still projects to the original key
         // set.
-        let kv = DataWal::open(&source).expect("parent: reopen source");
+        let mut kv = DataWal::open(&source).expect("parent: reopen source");
         for (k, v) in &expected {
             let got = kv
                 .get(k)

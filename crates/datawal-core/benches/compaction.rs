@@ -83,7 +83,7 @@ fn bench_compact_to_delete_heavy(c: &mut Criterion) {
     let mut group = c.benchmark_group("datawal_compact_to_delete_heavy");
 
     for &(label, ratio) in LIVE_RATIOS {
-        let (_src, kv) = populated_with_deletes(ratio);
+        let (_src, mut kv) = populated_with_deletes(ratio);
 
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_with_setup(bench_tempdir, |out_dir| {
@@ -101,7 +101,7 @@ fn bench_compact_to_overwrite_heavy(c: &mut Criterion) {
     let mut group = c.benchmark_group("datawal_compact_to_overwrite_heavy");
 
     for &(label, ratio) in LIVE_RATIOS {
-        let (_src, kv) = populated_with_overwrites(ratio);
+        let (_src, mut kv) = populated_with_overwrites(ratio);
 
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_with_setup(bench_tempdir, |out_dir| {
@@ -118,7 +118,7 @@ fn bench_export_jsonl(c: &mut Criterion) {
     let mut group = c.benchmark_group("datawal_export_jsonl");
 
     for &(label, ratio) in LIVE_RATIOS {
-        let (_src, kv) = populated_with_deletes(ratio);
+        let (_src, mut kv) = populated_with_deletes(ratio);
 
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_with_setup(

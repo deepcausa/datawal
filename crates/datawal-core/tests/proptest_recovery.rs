@@ -131,7 +131,7 @@ proptest! {
         {
             let _ = apply_seq_to_datawal(tmp.path(), &seq);
         }
-        let wal = DataWal::open(tmp.path()).expect("reopen at end");
+        let mut wal = DataWal::open(tmp.path()).expect("reopen at end");
 
         let expected = replay_expected(&seq);
         let mut got: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
@@ -158,7 +158,7 @@ proptest! {
             wal.delete(&[k]).unwrap();
             wal.put(&[k], &v).unwrap();
         }
-        let wal = DataWal::open(tmp.path()).unwrap();
+        let mut wal = DataWal::open(tmp.path()).unwrap();
         let got = wal.get(&[k]).unwrap();
         prop_assert_eq!(got, Some(v));
     }
@@ -179,18 +179,18 @@ proptest! {
 
         let stats_keys = {
             let _ = apply_seq_to_datawal(src.path(), &seq);
-            let src_wal = DataWal::open(src.path()).expect("reopen src");
+            let mut src_wal = DataWal::open(src.path()).expect("reopen src");
             src_wal.compact_to(&out_dir).expect("compact_to");
             src_wal.keys()
         };
 
-        let compacted = DataWal::open(&out_dir).expect("open compacted");
+        let mut compacted = DataWal::open(&out_dir).expect("open compacted");
         let mut got: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
         for k in compacted.keys() {
             got.insert(k.clone(), compacted.get(&k).unwrap().unwrap());
         }
         let mut expected: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-        let src_again = DataWal::open(src.path()).expect("reopen src again");
+        let mut src_again = DataWal::open(src.path()).expect("reopen src again");
         for k in stats_keys {
             expected.insert(k.clone(), src_again.get(&k).unwrap().unwrap());
         }
@@ -273,7 +273,7 @@ proptest! {
                 }
             }
         }
-        let wal = DataWal::open(tmp.path()).unwrap();
+        let mut wal = DataWal::open(tmp.path()).unwrap();
         let mut got: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
         for k in wal.keys() {
             got.insert(k.clone(), wal.get(&k).unwrap().unwrap());

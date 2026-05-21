@@ -72,7 +72,7 @@ fn bench_get(c: &mut Criterion) {
 
     for &n in KEYDIR_SIZES {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
-            let (_dir, kv) = populated_kv(n);
+            let (_dir, mut kv) = populated_kv(n);
             // Round-robin over the populated key range.
             let mut i = 0usize;
             b.iter(|| {
