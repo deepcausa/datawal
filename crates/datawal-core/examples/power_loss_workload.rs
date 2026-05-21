@@ -330,13 +330,7 @@ fn run(cli: Cli) -> Result<()> {
             if seq % FSYNC_BATCH == 0 {
                 log.fsync().context("DataWal::fsync (delete)")?;
                 let key_b64 = b64(&key);
-                write_oracle_line(
-                    &mut oracle,
-                    &OracleLine::Del {
-                        seq,
-                        key: &key_b64,
-                    },
-                )?;
+                write_oracle_line(&mut oracle, &OracleLine::Del { seq, key: &key_b64 })?;
                 dels += 1;
             }
         } else {
