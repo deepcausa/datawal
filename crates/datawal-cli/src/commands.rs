@@ -1,11 +1,18 @@
 //! Subcommand dispatch and implementations.
 //!
-//! Each subcommand is read-only. `RecordLog::open` and `DataWal::open`
-//! still acquire the cooperative single-writer lock; this is by
-//! design — an inspector that bypassed the lock could observe a
-//! partially-written tail in flight and would violate the
-//! single-writer invariant. If the store is already opened by a
-//! running writer, the inspector fails with exit code 1.
+//! Subcommands fall into two groups:
+//!
+//! - **Inspection** (`scan`, `get`, `report`, `verify`, `dump`,
+//!   `check`): never write to the source store.
+//! - **Source-untouched mutations** (`export`, `compact`): write a new
+//!   artefact at a caller-supplied output path; the source store on
+//!   disk is never modified.
+//!
+//! All subcommands acquire `DataWal::open` / `RecordLog::open` and
+//! therefore go through the cooperative single-writer lock. This is
+//! by design — bypassing the lock would risk observing a
+//! partially-written tail in flight. If the store is already opened
+//! by a running writer, the CLI fails with exit code 1.
 
 use std::process::ExitCode;
 
@@ -16,15 +23,21 @@ use datawal::{DataWal, Record, RecordLog};
 use crate::bytes_render::{
     render_for_human, render_value_for_get, BytesMode, DEFAULT_TRUNCATE_BYTES,
 };
-use crate::cli::{Cli, Command, DumpArgs, GetArgs, ScanArgs, StoreArg};
-use crate::output::{FrameLine, RecordLine, ReportObj, ValueHit, ValueMiss, VerifyObj, SCHEMA};
+use crate::cli::{Cli, Command, CompactArgs, DumpArgs, ExportArgs, GetArgs, ScanArgs, StoreArg};
+use crate::output::{
+    CheckObj, CompactObj, ExportObj, FrameLine, RecordLine, ReportObj, ValueHit, ValueMiss,
+    VerifyObj, SCHEMA,
+};
 
 /// Exit codes:
 /// - 0 success
-/// - 1 user / configuration / store-locked error (handled in `main`)
+/// - 1 user / configuration / store-locked / output-path error
+///   (handled in `main`; also returned in-band when `export` /
+///   `compact` would clobber an existing artefact)
 /// - 2 recoverable storage state observed (truncated tail, missing
 ///   key on `get`)
-/// - 3 hard storage error (CRC failure in a sealed segment)
+/// - 3 hard storage error (CRC failure in a sealed segment, or a
+///   per-record `get` failure during `check`)
 pub fn dispatch(cli: Cli) -> Result<ExitCode> {
     let json = cli.json;
     match cli.command {
@@ -33,6 +46,9 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode> {
         Command::Report(args) => cmd_report(args, json),
         Command::Verify(args) => cmd_verify(args, json),
         Command::Dump(args) => cmd_dump(args, json),
+        Command::Export(args) => cmd_export(args, json),
+        Command::Compact(args) => cmd_compact(args, json),
+        Command::Check(args) => cmd_check(args, json),
     }
 }
 
@@ -354,4 +370,149 @@ fn print_frame_human(rec: &Record, mode: BytesMode, truncate: Option<usize>) {
         rec.key.len(),
         rec.payload.len(),
     );
+}
+
+// -----------------------------------------------------------------
+// export
+// -----------------------------------------------------------------
+
+fn cmd_export(args: ExportArgs, json: bool) -> Result<ExitCode> {
+    // Refuse to clobber an existing outfile. `DataWal::export_jsonl`
+    // would itself fail on the open-for-write, but checking up front
+    // gives a uniform error path and lets us emit a stable, scriptable
+    // diagnostic (exit 1) before touching the source store at all.
+    if args.outfile.exists() {
+        eprintln!(
+            "datawal: export: refuses to overwrite existing file: {}",
+            args.outfile.display()
+        );
+        return Ok(ExitCode::from(1));
+    }
+
+    let mut store = DataWal::open(&args.store)
+        .with_context(|| format!("open store {}", args.store.display()))?;
+
+    // Live keys at the moment of open. `export_jsonl` walks the same
+    // KV projection (last-write-wins, tombstones suppressed), so this
+    // count matches the number of JSON lines written.
+    let records_written = store.keys().len() as u64;
+
+    store
+        .export_jsonl(&args.outfile)
+        .with_context(|| format!("export jsonl to {}", args.outfile.display()))?;
+
+    let bytes_written = std::fs::metadata(&args.outfile)
+        .with_context(|| format!("stat {}", args.outfile.display()))?
+        .len();
+
+    let obj = ExportObj::new(&args.outfile, records_written, bytes_written);
+    if json {
+        println!("{}", serde_json::to_string(&obj)?);
+    } else {
+        println!("schema:          {}", obj.schema);
+        println!("kind:            {}", obj.kind);
+        println!("outfile:         {}", obj.outfile);
+        println!("records_written: {}", obj.records_written);
+        println!("bytes_written:   {}", obj.bytes_written);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+// -----------------------------------------------------------------
+// compact
+// -----------------------------------------------------------------
+
+fn cmd_compact(args: CompactArgs, json: bool) -> Result<ExitCode> {
+    // `DataWal::compact_to` refuses non-empty targets, but a pre-flight
+    // check keeps the error code uniform (exit 1) and avoids opening
+    // the source on a clearly broken invocation.
+    if args.target.exists() {
+        let mut entries = std::fs::read_dir(&args.target)
+            .with_context(|| format!("read target dir {}", args.target.display()))?;
+        if entries.next().is_some() {
+            eprintln!(
+                "datawal: compact: target directory is not empty: {}",
+                args.target.display()
+            );
+            return Ok(ExitCode::from(1));
+        }
+    }
+
+    let mut store = DataWal::open(&args.store)
+        .with_context(|| format!("open store {}", args.store.display()))?;
+
+    let stats = store
+        .compact_to(&args.target)
+        .with_context(|| format!("compact to {}", args.target.display()))?;
+
+    let obj = CompactObj::new(&args.target, &stats);
+    if json {
+        println!("{}", serde_json::to_string(&obj)?);
+    } else {
+        println!("schema:          {}", obj.schema);
+        println!("kind:            {}", obj.kind);
+        println!("target:          {}", obj.target);
+        println!("live_keys:       {}", obj.live_keys);
+        println!("records_written: {}", obj.records_written);
+        println!("bytes_written:   {}", obj.bytes_written);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+// -----------------------------------------------------------------
+// check
+// -----------------------------------------------------------------
+
+fn cmd_check(args: StoreArg, json: bool) -> Result<ExitCode> {
+    let mut store = DataWal::open(&args.store)
+        .with_context(|| format!("open store {}", args.store.display()))?;
+
+    // Snapshot the live keyset before iterating, so a hypothetical
+    // future concurrent reader on the same handle cannot change what
+    // we check mid-loop. `keys()` already returns owned `Vec<Vec<u8>>`.
+    let keys = store.keys();
+    let keys_checked = keys.len() as u64;
+
+    for k in &keys {
+        match store.get(k) {
+            Ok(Some(_)) => { /* live key resolves end-to-end */ }
+            Ok(None) => {
+                // `keys()` is the KV projection; a None here would
+                // mean the projection and the keydir disagree, which
+                // is a hard internal-consistency failure.
+                eprintln!(
+                    "datawal: check: key reported by keys() is missing on get: b64:{}",
+                    B64.encode(k)
+                );
+                return Ok(ExitCode::from(3));
+            }
+            Err(e) => {
+                eprintln!("datawal: check: get failed: {:#}", e);
+                return Ok(ExitCode::from(3));
+            }
+        }
+    }
+
+    let report = store.log().recovery_report().context("recovery report")?;
+
+    let obj = CheckObj::new(keys_checked, &report);
+    if json {
+        println!("{}", serde_json::to_string(&obj)?);
+    } else {
+        println!("schema:               {}", obj.schema);
+        println!("kind:                 {}", obj.kind);
+        println!("keys_checked:         {}", obj.keys_checked);
+        println!("tail_truncated:       {}", obj.tail_truncated);
+        println!("tail_bytes_discarded: {}", obj.tail_bytes_discarded);
+        println!("mid_stream_errors:    {}", obj.mid_stream_errors);
+        println!("unsupported_versions: {}", obj.unsupported_versions);
+    }
+
+    if report.tail_truncated > 0 || report.mid_stream_errors > 0 {
+        Ok(ExitCode::from(2))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }

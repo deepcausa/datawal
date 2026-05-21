@@ -563,3 +563,222 @@ fn nonexistent_store_dir_creates_then_reports_empty() {
     let v: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(v["records_replayed"], 0);
 }
+
+// -----------------------------------------------------------------
+// export
+// -----------------------------------------------------------------
+
+#[test]
+fn export_writes_one_jsonl_line_per_live_key() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(
+        tmp.path(),
+        &[(b"alpha", b"one"), (b"beta", b"two"), (b"gamma", b"three")],
+    );
+    let outfile = tmp.path().join("export.jsonl");
+
+    let out = bin()
+        .args(["--json", "export"])
+        .arg(tmp.path())
+        .arg(&outfile)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "datawal.cli.v1");
+    assert_eq!(v["kind"], "export");
+    assert_eq!(v["records_written"], 3);
+    assert!(v["bytes_written"].as_u64().unwrap() > 0);
+    assert_eq!(
+        v["outfile"].as_str().unwrap(),
+        outfile.display().to_string()
+    );
+
+    let body = std::fs::read_to_string(&outfile).unwrap();
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 3);
+    // Each line is valid JSON; we don't assert payload shape beyond
+    // that — `DataWal::export_jsonl` owns the schema of the export
+    // body, the CLI just delegates.
+    for l in &lines {
+        let _: Value = serde_json::from_str(l).expect("valid JSON line");
+    }
+}
+
+#[test]
+fn export_refuses_to_overwrite_existing_outfile() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", b"v")]);
+    let outfile = tmp.path().join("existing.jsonl");
+    std::fs::write(&outfile, b"do-not-clobber\n").unwrap();
+
+    bin()
+        .args(["export"])
+        .arg(tmp.path())
+        .arg(&outfile)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "refuses to overwrite existing file",
+        ));
+
+    // Source file untouched.
+    let body = std::fs::read_to_string(&outfile).unwrap();
+    assert_eq!(body, "do-not-clobber\n");
+}
+
+// -----------------------------------------------------------------
+// compact
+// -----------------------------------------------------------------
+
+#[test]
+fn compact_writes_to_empty_target_and_emits_stats() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(
+        tmp.path(),
+        &[(b"a", b"1"), (b"b", b"2"), (b"a", b"1-updated")],
+    );
+    let target = tmp.path().join("compacted");
+
+    let out = bin()
+        .args(["--json", "compact"])
+        .arg(tmp.path())
+        .arg(&target)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "datawal.cli.v1");
+    assert_eq!(v["kind"], "compact");
+    // 2 live keys ("a" was overwritten, "b" was put once).
+    assert_eq!(v["live_keys"], 2);
+    assert_eq!(v["records_written"], 2);
+    assert!(v["bytes_written"].as_u64().unwrap() > 0);
+
+    // Target dir now contains at least one segment file.
+    let mut found_segment = false;
+    for entry in std::fs::read_dir(&target).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().into_string().unwrap();
+        if name.ends_with(".dwal") {
+            found_segment = true;
+            break;
+        }
+    }
+    assert!(found_segment, "compacted target missing .dwal segment");
+
+    // Reopen the compacted target and confirm both live keys resolve.
+    let mut reopened = DataWal::open(&target).unwrap();
+    assert_eq!(
+        reopened.get(b"a").unwrap().as_deref(),
+        Some(b"1-updated".as_ref())
+    );
+    assert_eq!(reopened.get(b"b").unwrap().as_deref(), Some(b"2".as_ref()));
+}
+
+#[test]
+fn compact_refuses_non_empty_target() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", b"v")]);
+    let target = tmp.path().join("dirty-target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("stray.txt"), b"hands off").unwrap();
+
+    bin()
+        .args(["compact"])
+        .arg(tmp.path())
+        .arg(&target)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("target directory is not empty"));
+
+    // Stray file untouched.
+    assert_eq!(
+        std::fs::read_to_string(target.join("stray.txt")).unwrap(),
+        "hands off"
+    );
+}
+
+// -----------------------------------------------------------------
+// check
+// -----------------------------------------------------------------
+
+#[test]
+fn check_clean_store_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(
+        tmp.path(),
+        &[(b"alpha", b"1"), (b"beta", b"2"), (b"gamma", b"3")],
+    );
+
+    let out = bin()
+        .args(["--json", "check"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["schema"], "datawal.cli.v1");
+    assert_eq!(v["kind"], "check");
+    assert_eq!(v["keys_checked"], 3);
+    assert_eq!(v["tail_truncated"], 0);
+    assert_eq!(v["tail_bytes_discarded"], 0);
+    assert_eq!(v["mid_stream_errors"], 0);
+    assert_eq!(v["unsupported_versions"], 0);
+}
+
+#[test]
+fn check_detects_tail_truncation() {
+    // Write a clean store, then append garbage to the active segment
+    // so recovery surfaces a truncated tail without breaking any
+    // valid frame. Exit code 2 is the documented "recoverable storage
+    // state observed" code for `check`.
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k1", b"v1"), (b"k2", b"v2")]);
+
+    // Locate the active segment (the lexicographically-greatest
+    // `[0-9]{8}\.dwal` file) and append junk bytes.
+    let mut segments: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "dwal").unwrap_or(false))
+        .collect();
+    segments.sort();
+    let active = segments.last().expect("at least one segment file").clone();
+
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&active)
+        .unwrap();
+    // 8 garbage bytes — not a valid frame header, will be truncated
+    // back to the last valid record by recovery.
+    f.write_all(&[0xAB; 8]).unwrap();
+    f.sync_all().unwrap();
+    drop(f);
+
+    let out = bin()
+        .args(["--json", "check"])
+        .arg(tmp.path())
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["kind"], "check");
+    assert_eq!(v["keys_checked"], 2);
+    assert!(v["tail_truncated"].as_u64().unwrap() >= 1);
+    assert!(v["tail_bytes_discarded"].as_u64().unwrap() >= 1);
+}

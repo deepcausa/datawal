@@ -1,8 +1,15 @@
 //! Command-line argument parsing via clap derive.
 //!
-//! All subcommands are read-only inspection over a datawal store.
-//! No subcommand performs `put` / `delete` / `rotate` / `compact`;
-//! mutating operations are out of scope for this binary in 0.1.x.
+//! Subcommands fall into two groups:
+//!
+//! - **Inspection** (read-only): `scan`, `get`, `report`, `verify`, `dump`,
+//!   `check`. They never write to the source store.
+//! - **Source-untouched mutations**: `export`, `compact`. They produce a new
+//!   artefact at a caller-supplied output path; the source store on disk is
+//!   never modified.
+//!
+//! No subcommand performs `put` / `delete` / `rotate` in-place. Mutating
+//! the source is intentionally out of scope for this binary in 0.1.x.
 
 use std::path::PathBuf;
 
@@ -10,12 +17,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::bytes_render::BytesMode;
 
-/// Read-only inspector for datawal stores.
+/// CLI for datawal stores: read-only inspection plus source-untouched
+/// export/compact operations.
 #[derive(Debug, Parser)]
 #[command(
     name = "datawal",
     version,
-    about = "Read-only inspector for datawal stores (scan, get, report, verify, dump).",
+    about = "Inspect datawal stores and produce derived artefacts (scan, get, report, verify, dump, check, export, compact).",
     long_about = None,
 )]
 pub struct Cli {
@@ -70,6 +78,31 @@ pub enum Command {
     /// One line per frame; useful for inspecting wire layout without
     /// dumping potentially large payloads.
     Dump(DumpArgs),
+
+    /// Export the live KV projection as JSONL to a new file.
+    ///
+    /// Opens the store as a `DataWal` and writes one JSON object per
+    /// live key (base64-encoded payload) via `DataWal::export_jsonl`.
+    /// The source store on disk is never modified. Refuses to
+    /// overwrite an existing `OUTFILE` (exit 1).
+    Export(ExportArgs),
+    /// Snapshot-compact the store into a fresh target directory.
+    ///
+    /// Calls `DataWal::compact_to`, which rebuilds a minimal log
+    /// containing only live keys into `TARGET`. `TARGET` must not
+    /// exist or must be empty (exit 1 otherwise). The source store
+    /// on disk is never modified; the caller decides when (and if)
+    /// to swap the directories.
+    Compact(CompactArgs),
+    /// Open the store, validate every live key end-to-end, and
+    /// report source health.
+    ///
+    /// Performs `DataWal::open` + a `get` for each `keys()` entry
+    /// (forcing per-record CRC32C revalidation via the fd pool) and
+    /// then reads the `RecoveryReport` to surface tail truncation
+    /// or unsupported-version frames. Exits 2 on tail truncation,
+    /// 3 on any mid-stream `get` failure.
+    Check(StoreArg),
 }
 
 /// Common argument shared by subcommands that only need the store path.
@@ -173,4 +206,25 @@ pub struct DumpArgs {
     /// Do not truncate long keys / payloads in human form.
     #[arg(long)]
     pub no_truncate: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ExportArgs {
+    /// Path to the datawal store directory (read-only).
+    pub store: PathBuf,
+
+    /// Destination JSONL file. Must not already exist; the CLI refuses
+    /// to overwrite to avoid clobbering caller artefacts.
+    pub outfile: PathBuf,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct CompactArgs {
+    /// Path to the datawal store directory (read-only).
+    pub store: PathBuf,
+
+    /// Target directory for the compacted snapshot. Must either not
+    /// exist or be an empty directory; `DataWal::compact_to` refuses
+    /// to write into a non-empty target.
+    pub target: PathBuf,
 }
