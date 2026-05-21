@@ -200,7 +200,232 @@ fn get_requires_a_key_arg() {
         .arg(tmp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("pass --key-base64 or --key-hex"));
+        .stderr(predicate::str::contains(
+            "pass exactly one of --key, --key-base64, or --key-hex",
+        ));
+}
+
+#[test]
+fn get_accepts_key_text() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"alpha", b"1")]);
+
+    // human form: --bytes auto and printable -> literal "1"
+    let out = bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "alpha"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(std::str::from_utf8(&out).unwrap().trim_end(), "1");
+}
+
+#[test]
+fn clap_rejects_multiple_key_modes() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", b"v")]);
+
+    bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "k", "--key-base64", "ag=="])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// -----------------------------------------------------------------
+// human rendering (printable vs binary)
+// -----------------------------------------------------------------
+
+#[test]
+fn get_printable_value_prints_literal_text() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", b"hello")]);
+
+    let out = bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "k"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(std::str::from_utf8(&out).unwrap().trim_end(), "hello");
+}
+
+#[test]
+fn get_binary_value_hints_in_auto_mode() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", &[0x00u8, 0x01, 0xFF][..])]);
+
+    let assertion = bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "k"])
+        .assert()
+        .success();
+    let out = assertion.get_output();
+    assert!(out.stdout.is_empty(), "stdout should be empty on hint path");
+    let stderr = std::str::from_utf8(&out.stderr).unwrap();
+    assert!(stderr.contains("binary value, 3 bytes"));
+    assert!(stderr.contains("--bytes base64"));
+}
+
+#[test]
+fn get_bytes_base64_emits_base64_for_binary() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", &[0x00u8, 0x01, 0xFF][..])]);
+
+    let out = bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "k", "--bytes", "base64"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(std::str::from_utf8(&out).unwrap().trim_end(), "AAH/");
+}
+
+#[test]
+fn get_bytes_hex_emits_hex_for_binary() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", &[0xDEu8, 0xAD, 0xBE, 0xEF][..])]);
+
+    let out = bin()
+        .args(["get"])
+        .arg(tmp.path())
+        .args(["--key", "k", "--bytes", "hex"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(std::str::from_utf8(&out).unwrap().trim_end(), "deadbeef");
+}
+
+#[test]
+fn scan_human_renders_printable_key_payload_literally() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"alpha", b"1"), (b"beta", b"22")]);
+
+    bin()
+        .args(["scan"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key=alpha payload=1"))
+        .stdout(predicate::str::contains("key=beta payload=22"));
+}
+
+#[test]
+fn scan_human_quotes_key_with_spaces() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"foo bar", b"baz")]);
+
+    bin()
+        .args(["scan"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        // `key="foo bar"`; the `=` after `key` and the surrounding
+        // quotes keep the field unambiguous.
+        .stdout(predicate::str::contains("key=\"foo bar\""));
+}
+
+#[test]
+fn scan_human_renders_binary_payload_with_b64_prefix() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"k", &[0x00u8, 0x01, 0xFF][..])]);
+
+    bin()
+        .args(["scan"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("payload=b64:"));
+}
+
+#[test]
+fn scan_bytes_hex_forces_hex_for_all_bytes() {
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"abc", b"xyz")]);
+
+    bin()
+        .args(["scan", "--bytes", "hex"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        // Even printable bytes are encoded once `--bytes hex` is set.
+        .stdout(predicate::str::contains("key=hex:616263"))
+        .stdout(predicate::str::contains("payload=hex:78797a"));
+}
+
+#[test]
+fn scan_truncates_long_payload_by_default() {
+    let tmp = TempDir::new().unwrap();
+    // 100 ASCII chars -> truncated to 64 in auto literal form.
+    let big = vec![b'A'; 100];
+    populate_kv(tmp.path(), &[(b"k", &big)]);
+
+    let out = bin()
+        .args(["scan"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = std::str::from_utf8(&out).unwrap();
+    assert!(s.contains("..."), "expected truncation marker in `{s}`");
+}
+
+#[test]
+fn scan_no_truncate_emits_full_payload() {
+    let tmp = TempDir::new().unwrap();
+    let big = vec![b'A'; 100];
+    populate_kv(tmp.path(), &[(b"k", &big)]);
+
+    let out = bin()
+        .args(["scan", "--no-truncate"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let s = std::str::from_utf8(&out).unwrap();
+    // 100 As, all printable -> appears in full, no ellipsis added by us.
+    assert!(s.contains(&"A".repeat(100)));
+}
+
+#[test]
+fn json_output_unchanged_by_bytes_flag() {
+    // `--bytes` must NOT alter the JSON schema. Always base64.
+    let tmp = TempDir::new().unwrap();
+    populate_kv(tmp.path(), &[(b"alpha", b"1")]);
+
+    let out = bin()
+        .args(["--json", "scan", "--bytes", "hex"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let lines = parse_json_lines(&out);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["key_base64"], B64.encode(b"alpha"));
+    assert_eq!(lines[0]["payload_base64"], B64.encode(b"1"));
+    // No `key_hex` or `payload_hex` fields are introduced.
+    assert!(lines[0].get("key_hex").is_none());
+    assert!(lines[0].get("payload_hex").is_none());
 }
 
 // -----------------------------------------------------------------

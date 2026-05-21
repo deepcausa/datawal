@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
+mod bytes_render;
 mod cli;
 mod commands;
 mod output;

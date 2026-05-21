@@ -60,6 +60,16 @@ log "[scan] human form lists at least one PUT"
 grep -q 'type=PUT' "$tmp/scan.human.out" \
     || die "scan human form did not contain any PUT line"
 
+log "[scan] human form renders printable keys literally (no base64 noise)"
+# populate_smoke_store seeds alpha/beta/gamma/delta -> all printable.
+grep -q 'key=alpha' "$tmp/scan.human.out" \
+    || die "scan human form did not render printable key 'alpha' literally"
+
+log "[scan] --bytes hex forces hex rendering for all bytes"
+"$bin" scan "$store" --bytes hex --limit 1 >"$tmp/scan.hex.out"
+grep -q 'key=hex:' "$tmp/scan.hex.out" \
+    || die "scan --bytes hex did not produce hex: prefix"
+
 log "[scan] --json emits valid datawal.cli.v1 records"
 "$bin" --json scan "$store" >"$tmp/scan.json.ndjson"
 first_line="$(head -n1 "$tmp/scan.json.ndjson")"
@@ -102,6 +112,11 @@ set -e
 [[ "$rc" -eq 2 ]] || die "expected exit 2 on miss, got $rc"
 jq -e '.kind == "miss"' "$tmp/get.miss.json" >/dev/null \
     || die "miss JSON did not contain kind=miss"
+
+log "[get] --key TEXT with printable value prints the value literally"
+"$bin" get "$store" --key alpha >"$tmp/get.text.out"
+got="$(tr -d '\n' <"$tmp/get.text.out")"
+[[ "$got" == "1" ]] || die "expected literal '1' for --key alpha, got '$got'"
 
 log "[get] bad --key-base64 fails with exit 1"
 set +e

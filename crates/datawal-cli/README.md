@@ -45,13 +45,25 @@ whole log in memory.
 ### `get` — fetch the current value for a key
 
 ```bash
-datawal get ./my-store --key-base64 aGVsbG8=
-datawal get ./my-store --key-hex deadbeef
-datawal --json get ./my-store --key-base64 aGVsbG8=
+datawal get ./my-store --key alpha            # UTF-8 text (most ergonomic)
+datawal get ./my-store --key-base64 aGVsbG8=  # base64
+datawal get ./my-store --key-hex deadbeef     # hex
+datawal --json get ./my-store --key alpha
 ```
 
 Opens the store as a `DataWal` (last-write-wins KV projection) and
 returns the live value. Exits with code 2 when the key is absent.
+
+In human form, printable-ASCII values are printed literally on
+stdout. Binary values fall back to a hint on stderr (`<binary
+value, N bytes; use --bytes base64 or --bytes hex>`) so terminals
+don't get garbled. Force a specific encoding with `--bytes
+base64|hex`:
+
+```bash
+datawal get ./my-store --key alpha --bytes base64
+datawal get ./my-store --key alpha --bytes hex
+```
 
 ### `report` — print the `RecoveryReport`
 
@@ -83,6 +95,28 @@ datawal --json dump ./my-store
 
 Header-only output (no payload bytes). Useful for inspecting wire
 layout on stores with large records.
+
+## Human vs JSON output
+
+The two output modes are deliberately different in shape and
+guarantees.
+
+**Human form (default)** — designed to be skimmable in a terminal.
+Printable-ASCII keys and payloads are rendered literally (quoted as
+`"foo bar"` when whitespace, quotes, or backslashes would otherwise
+blur field boundaries). Binary bytes are rendered with an explicit
+prefix — `b64:<base64>` by default, `hex:<hex>` when `--bytes hex`
+is set — so the reader sees that the field is encoded and which
+encoding is in use. Long keys and payloads are truncated to 64 bytes
+with a trailing `...`; pass `--no-truncate` to disable truncation.
+Override the heuristic with `--bytes auto|raw|base64|hex` on `scan`,
+`get`, and `dump`.
+
+**JSON form (`--json`)** — designed to be parsed. Always emits
+base64-encoded bytes regardless of `--bytes`; never truncates; never
+introduces alternative encoded fields. The `datawal.cli.v1` schema
+is the source of truth for tooling and is not affected by any
+human-rendering flag.
 
 ## JSON output schema
 

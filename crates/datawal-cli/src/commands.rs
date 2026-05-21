@@ -13,6 +13,9 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use datawal::{DataWal, Record, RecordLog};
 
+use crate::bytes_render::{
+    render_for_human, render_value_for_get, BytesMode, DEFAULT_TRUNCATE_BYTES,
+};
 use crate::cli::{Cli, Command, DumpArgs, GetArgs, ScanArgs, StoreArg};
 use crate::output::{FrameLine, RecordLine, ReportObj, ValueHit, ValueMiss, VerifyObj, SCHEMA};
 
@@ -33,6 +36,14 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode> {
     }
 }
 
+fn truncate_for(no_truncate: bool) -> Option<usize> {
+    if no_truncate {
+        None
+    } else {
+        Some(DEFAULT_TRUNCATE_BYTES)
+    }
+}
+
 // -----------------------------------------------------------------
 // scan
 // -----------------------------------------------------------------
@@ -44,6 +55,8 @@ fn cmd_scan(args: ScanArgs, json: bool) -> Result<ExitCode> {
     let from_seg = args.from_segment;
     let from_off = args.from_offset.unwrap_or(0);
     let limit = args.limit;
+    let mode: BytesMode = args.bytes.into();
+    let truncate = truncate_for(args.no_truncate);
 
     let mut emitted: u64 = 0;
     {
@@ -52,7 +65,6 @@ fn cmd_scan(args: ScanArgs, json: bool) -> Result<ExitCode> {
             let rec = match item {
                 Ok(r) => r,
                 Err(e) => {
-                    // Hard mid-stream error in a sealed segment.
                     eprintln!("datawal: scan: mid-stream error: {:#}", e);
                     return Ok(ExitCode::from(3));
                 }
@@ -71,7 +83,7 @@ fn cmd_scan(args: ScanArgs, json: bool) -> Result<ExitCode> {
                 let line = RecordLine::from_record(&rec);
                 println!("{}", serde_json::to_string(&line)?);
             } else {
-                print_record_human(&rec);
+                print_record_human(&rec, mode, truncate);
             }
 
             emitted += 1;
@@ -83,9 +95,6 @@ fn cmd_scan(args: ScanArgs, json: bool) -> Result<ExitCode> {
         }
     }
 
-    // Tail truncation downgrades exit code to 2. Reuse the same
-    // RecordLog (we still hold the lock) — opening a second one in
-    // the same process on the same dir would fail.
     let report = log.recovery_report()?;
     if report.tail_truncated > 0 {
         Ok(ExitCode::from(2))
@@ -94,21 +103,17 @@ fn cmd_scan(args: ScanArgs, json: bool) -> Result<ExitCode> {
     }
 }
 
-fn print_record_human(rec: &Record) {
+fn print_record_human(rec: &Record, mode: BytesMode, truncate: Option<usize>) {
     let rt = match rec.record_type {
         datawal::RecordType::Raw => "RAW",
         datawal::RecordType::Put => "PUT",
         datawal::RecordType::Delete => "DEL",
     };
+    let key = render_for_human(&rec.key, mode, truncate);
+    let payload = render_for_human(&rec.payload, mode, truncate);
     println!(
-        "seg={:08} off={:>10} len={:>8} type={:<3} txid={:>10} key_len={:>6} payload_len={:>10}",
-        rec.segment,
-        rec.offset,
-        rec.len,
-        rt,
-        rec.txid,
-        rec.key.len(),
-        rec.payload.len(),
+        "seg={:08} off={:>10} len={:>8} type={:<3} txid={:>10} key={} payload={}",
+        rec.segment, rec.offset, rec.len, rt, rec.txid, key, payload,
     );
 }
 
@@ -118,6 +123,9 @@ fn print_record_human(rec: &Record) {
 
 fn cmd_get(args: GetArgs, json: bool) -> Result<ExitCode> {
     let key = decode_key(&args)?;
+    let mode: BytesMode = args.bytes.into();
+    let truncate = truncate_for(args.no_truncate);
+
     let store = DataWal::open(&args.store)
         .with_context(|| format!("open store {}", args.store.display()))?;
     match store.get(&key)? {
@@ -126,9 +134,17 @@ fn cmd_get(args: GetArgs, json: bool) -> Result<ExitCode> {
                 let line = ValueHit::new(&key, &value);
                 println!("{}", serde_json::to_string(&line)?);
             } else {
-                // Human form: base64 of value on stdout, single line.
-                // Bytes-faithful and round-trippable from shell.
-                println!("{}", B64.encode(&value));
+                match render_value_for_get(&value, mode, truncate) {
+                    Ok(rendered) => println!("{}", rendered),
+                    Err(hint) => {
+                        // Binary value in Auto/Raw mode: don't dump
+                        // control bytes; emit a hint on stderr and
+                        // exit 0 (it was a hit). The user can re-run
+                        // with `--bytes base64` / `--bytes hex` /
+                        // `--json` to retrieve actual bytes.
+                        eprintln!("{}", hint);
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -145,15 +161,20 @@ fn cmd_get(args: GetArgs, json: bool) -> Result<ExitCode> {
 }
 
 fn decode_key(args: &GetArgs) -> Result<Vec<u8>> {
-    match (&args.key_base64, &args.key_hex) {
-        (Some(b64), None) => B64
+    match (&args.key, &args.key_base64, &args.key_hex) {
+        (Some(text), None, None) => Ok(text.as_bytes().to_vec()),
+        (None, Some(b64), None) => B64
             .decode(b64.as_bytes())
             .map_err(|e| anyhow!("invalid --key-base64: {e}")),
-        (None, Some(hex)) => decode_hex(hex),
-        (Some(_), Some(_)) => Err(anyhow!(
-            "pass exactly one of --key-base64 or --key-hex, not both"
+        (None, None, Some(hex)) => decode_hex(hex),
+        (None, None, None) => Err(anyhow!(
+            "pass exactly one of --key, --key-base64, or --key-hex"
         )),
-        (None, None) => Err(anyhow!("pass --key-base64 or --key-hex")),
+        // clap `group = "key"` should already prevent multi-set, but
+        // we treat any unexpected combination defensively.
+        _ => Err(anyhow!(
+            "pass exactly one of --key, --key-base64, or --key-hex"
+        )),
     }
 }
 
@@ -228,9 +249,6 @@ fn cmd_verify(args: StoreArg, json: bool) -> Result<ExitCode> {
         loop {
             match iter.next() {
                 Some(Ok(rec)) => {
-                    // `scan_iter` already verifies CRC32C per frame
-                    // as it decodes; reaching here means the frame
-                    // is valid.
                     frames_checked += 1;
                     last_segment = rec.segment;
                     last_offset = rec.offset;
@@ -242,9 +260,6 @@ fn cmd_verify(args: StoreArg, json: bool) -> Result<ExitCode> {
                 None => break,
             }
         }
-        // Take the report from the iterator while iteration is fully
-        // consumed; the cached `RecordLog::recovery_report()` would
-        // also be valid but the iterator's view is the freshest.
         final_report = iter.recovery_report();
     }
 
@@ -286,6 +301,8 @@ fn cmd_dump(args: DumpArgs, json: bool) -> Result<ExitCode> {
     let log = RecordLog::open(&args.store)
         .with_context(|| format!("open record log {}", args.store.display()))?;
     let iter = log.scan_iter()?;
+    let mode: BytesMode = args.bytes.into();
+    let truncate = truncate_for(args.no_truncate);
 
     let mut emitted: u64 = 0;
     for item in iter {
@@ -301,7 +318,7 @@ fn cmd_dump(args: DumpArgs, json: bool) -> Result<ExitCode> {
             let line = FrameLine::from_record(&rec);
             println!("{}", serde_json::to_string(&line)?);
         } else {
-            print_frame_human(&rec);
+            print_frame_human(&rec, mode, truncate);
         }
 
         emitted += 1;
@@ -315,19 +332,25 @@ fn cmd_dump(args: DumpArgs, json: bool) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn print_frame_human(rec: &Record) {
+fn print_frame_human(rec: &Record, mode: BytesMode, truncate: Option<usize>) {
     let rt = match rec.record_type {
         datawal::RecordType::Raw => "RAW",
         datawal::RecordType::Put => "PUT",
         datawal::RecordType::Delete => "DEL",
     };
+    // `dump` is header-only: never emit payload bytes, even when
+    // they're printable. Always show payload_len numerically. Keys
+    // are small (max 64 KiB) and inspecting them is the whole point,
+    // so we do render the key.
+    let key = render_for_human(&rec.key, mode, truncate);
     println!(
-        "seg={:08} off={:>10} len={:>8} type={:<3} txid={:>10} key_len={:>6} payload_len={:>10}",
+        "seg={:08} off={:>10} len={:>8} type={:<3} txid={:>10} key={} key_len={} payload_len={}",
         rec.segment,
         rec.offset,
         rec.len,
         rt,
         rec.txid,
+        key,
         rec.key.len(),
         rec.payload.len(),
     );

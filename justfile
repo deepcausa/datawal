@@ -60,6 +60,51 @@ example-tail-recovery:
     cargo run -p datawal --example tail_recovery_demo
 
 # ---------------------------------------------------------------------------
+# CLI (datawal-cli)
+# ---------------------------------------------------------------------------
+#
+# `datawal-cli` ships the read-only `datawal` binary (scan/get/report/
+# verify/dump). It is not yet on crates.io; build from the workspace.
+#
+# Quick usage:
+#
+#     just cli-build                     # produces target/release/datawal
+#     just cli-run -- scan /tmp/store    # forwards args after `--`
+#     just cli-install-local             # installs to ~/.cargo/bin/datawal
+#     just cli-smoke                     # end-to-end smoke (needs jq)
+
+# Release build of the CLI binary. Binary path: target/release/datawal
+cli-build:
+    cargo build -p datawal-cli --release
+
+# Debug build (faster, larger). Binary path: target/debug/datawal
+cli-build-debug:
+    cargo build -p datawal-cli
+
+# Run the CLI via cargo. Pass args after `--`.
+# Usage: just cli-run -- scan /tmp/store --json --limit 5
+cli-run *ARGS:
+    cargo run -p datawal-cli --release -- {{ARGS}}
+
+# Print the path of the release binary (after `just cli-build`).
+cli-path:
+    @echo "$(pwd)/target/release/datawal"
+
+# Install the CLI into ~/.cargo/bin (or $CARGO_HOME/bin). Uses --path so
+# crates.io is not needed.
+cli-install-local:
+    cargo install --path crates/datawal-cli --force
+
+# Show CLI help (release build).
+cli-help: cli-build
+    ./target/release/datawal --help
+
+# End-to-end smoke: builds, seeds a temp store, exercises every subcommand
+# with jq assertions. Requires `jq` on PATH.
+cli-smoke:
+    crates/datawal-cli/examples/cli_read_smoke.sh
+
+# ---------------------------------------------------------------------------
 # Benchmarks
 # ---------------------------------------------------------------------------
 #
